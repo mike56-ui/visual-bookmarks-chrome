@@ -99,12 +99,72 @@ describe('Chromium real-bookmark dock workflow', () => {
     expect(state.previewImages).toBe(10);
     expect(state.cardWidth).toBeGreaterThan(100);
     expect(state.titleOverflow).toBe(true);
+    const iconRequest = await extPage.$eval('#bookmarks .site-icon__image', image => image.src);
+    expect(new URL(iconRequest).searchParams.get('sz')).toBe('128');
+    expect(new URL(iconRequest).searchParams.get('domain_url')).toBe('https://example.com');
+  });
+
+  it('keeps sharp uniform icons, previews and text in separate zones at high DPI', async() => {
+    const screenshot = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800"><rect width="1280" height="800" fill="#eaf2ff"/><path d="M0 180H1280M320 0V800M640 0V800" stroke="#3975ce" stroke-width="8"/><text x="60" y="120" font-size="56" fill="#174070">Clear page preview</text></svg>');
+    await extPage.evaluate(image => {
+      const logo = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><circle cx="64" cy="64" r="60" fill="#1266ef"/><text x="64" y="87" text-anchor="middle" font-family="sans-serif" font-size="70" fill="white">A</text></svg>');
+      const card = document.createElement('a', { is: 'vb-bookmark' });
+      Object.assign(card, { id: 'quality-fixture', url: 'https://example.com/private?token=do-not-send',
+        title: 'A long bookmark title for checking icon and label separation', hasTitle: true,
+        externalLogo: logo, image, isCustomImage: true });
+      const host = document.createElement('div');
+      host.id = 'quality-fixture-host';
+      host.style.cssText = 'position:fixed;top:100px;right:40px;width:clamp(100px,12vw,180px);z-index:9999';
+      host.append(card);
+      document.body.append(host);
+    }, screenshot);
+    const selector = '[data-id="quality-fixture"]';
+    try {
+      await extPage.waitForFunction(() => {
+        const image = document.querySelector('[data-id="quality-fixture"] .site-icon__image');
+        return image?.complete && !image.hidden;
+      });
+      for (const width of [1440, 848]) {
+        await extPage.setViewport({ width, height: 900, deviceScaleFactor: 2 });
+        const geometry = await extPage.$eval(selector, card => {
+          const rect = name => card.querySelector(name).getBoundingClientRect();
+          const stage = rect('.bookmark__stage');
+          const frame = rect('.site-icon');
+          const title = rect('.bookmark__title');
+          const domain = rect('.bookmark__domain');
+          const icon = card.querySelector('.site-icon__image');
+          return {
+            separate: title.top >= stage.bottom && domain.top >= title.bottom,
+            iconContained: frame.top >= stage.top && frame.bottom <= stage.bottom,
+            uniform: frame.width === 56 && frame.height === 56,
+            noUpscaling: rect('.site-icon__image').width <= icon.naturalWidth,
+            previewHidden: getComputedStyle(card.querySelector('.bookmark__screenshot')).opacity === '0',
+            noOverflow: domain.right <= stage.right + 1 && title.right <= stage.right + 1
+          };
+        });
+        expect(geometry).toEqual({ separate: true, iconContained: true, uniform: true,
+          noUpscaling: true, previewHidden: true, noOverflow: true });
+      }
+      await extPage.hover(selector);
+      await extPage.waitForFunction(() => getComputedStyle(document.querySelector('[data-id="quality-fixture"] .bookmark__screenshot')).opacity === '1');
+      expect(await extPage.$eval(`${selector} .bookmark__caption`, node => node.getBoundingClientRect().top))
+        .toBeGreaterThanOrEqual(await extPage.$eval(`${selector} .bookmark__stage`, node => node.getBoundingClientRect().bottom));
+      await extPage.evaluate(() => {
+        const image = document.querySelector('[data-id="quality-fixture"] .site-icon__image');
+        image.dispatchEvent(new Event('error'));
+      });
+      expect(await extPage.$eval(`${selector} .site-icon__fallback`, node => !node.hidden)).toBe(true);
+    } finally {
+      await extPage.evaluate(() => document.querySelector('#quality-fixture-host')?.remove());
+      await extPage.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+    }
   });
 
   it('shows hover delete, deletes safely, and restores through undo', async() => {
     const bookmarkSelector = `[data-id="${data.bookmarkIds[0]}"]`;
     const deleteSelector = `${bookmarkSelector} .bookmark__delete`;
-    expect(await extPage.$eval(deleteSelector, node => getComputedStyle(node).opacity)).toBe('0');
+    await extPage.mouse.move(1000, 20);
+    await extPage.waitForFunction(selector => getComputedStyle(document.querySelector(selector)).opacity === '0', {}, deleteSelector);
     await extPage.hover(bookmarkSelector);
     await extPage.waitForFunction(
       selector => getComputedStyle(document.querySelector(selector)).opacity === '1',

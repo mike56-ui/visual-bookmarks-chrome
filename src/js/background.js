@@ -110,7 +110,7 @@ async function captureScreen(link, callback) {
             focused: true
           }, function() {
             setTimeout(() => {
-              browser.tabs.captureVisibleTab(w.id, function(dataUrl) {
+              browser.tabs.captureVisibleTab(w.id, { format: 'png' }, function(dataUrl) {
                 callback({
                   capture: dataUrl,
                   title: tabInfo.title

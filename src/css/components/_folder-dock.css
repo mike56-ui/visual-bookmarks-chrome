@@ -221,6 +221,11 @@ body::before {
   object-fit: contain;
 }
 
+.folder-card__cell:has(.site-icon) {
+  background: transparent;
+  border-color: transparent;
+}
+
 .folder-card__meta {
   min-width: 0;
   margin-top: 9px;
