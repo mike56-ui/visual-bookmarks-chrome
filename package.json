@@ -12,7 +12,7 @@
     "dev:firefox": "BROWSER=firefox webpack --mode=development --watch",
     "build:firefox": "BROWSER=firefox webpack --mode=production",
     "build:all": "npm run build && npm run build:firefox",
-    "zip": "bestzip extension.zip extension/*",
+    "zip": "python scripts/package_extension.py",
     "release": "npm run build && npm run zip",
     "locales": "node autocompleteLocales.js",
     "test": "jest --detectOpenHandles"

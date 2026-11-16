@@ -1,0 +1,63 @@
+name: Build and release Edge extension
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Serialize releases so an older build cannot replace the latest download.
+concurrency:
+  group: edge-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+      RELEASE_BUILD: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build and validate installation package
+        run: npm run release
+      - name: Read package version
+        id: version
+        run: node -e "console.log('tag=v' + require('./extension_chrome/manifest.json').version)" >> "$GITHUB_OUTPUT"
+      - name: Save build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.tag }}-edge
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          # A re-run reuses its version; never replace an already published package.
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' > /tmp/release-draft; then
+            if [ "$(cat /tmp/release-draft)" = 'false' ]; then
+              echo "Release $TAG already published; keeping the original assets."
+              exit 0
+            fi
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Visual Bookmarks $TAG" --draft --notes-file docs/release-notes.md
+          fi
+          gh release upload "$TAG" dist/visual-bookmarks-edge.zip dist/SHA256SUMS.txt --clobber
+          gh release edit "$TAG" --draft=false --latest

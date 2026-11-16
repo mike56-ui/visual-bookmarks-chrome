@@ -1,9 +1,15 @@
+// CI adds a fourth component so every released package has an increasing version.
+const releaseBuild = process.env.RELEASE_BUILD;
+if (releaseBuild && (!/^[1-9]\d*$/.test(releaseBuild) || Number(releaseBuild) > 65535)) {
+  throw new Error('RELEASE_BUILD must be an integer between 1 and 65535');
+}
+
 const common = {
   manifest_version: 3,
   default_locale: 'en',
   name: '__MSG_ext_name__',
   description: '__MSG_ext_desc__',
-  version: '7.7.1',
+  version: releaseBuild ? `7.7.1.${releaseBuild}` : '7.7.1',
   icons: {
     16: 'icons/icon16.png',
     48: 'icons/icon48.png',
