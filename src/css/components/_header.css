@@ -262,6 +262,74 @@
   }
 }
 
+body[data-folder-dock] .header {
+  max-width: 820px;
+  margin: 12px auto 0;
+  padding: 0;
+}
+
+body[data-folder-dock] .header__items--select,
+body[data-folder-dock] .back {
+  display: none;
+}
+
+body[data-folder-dock] .search-wrap {
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 24px;
+  background: rgb(18 22 42 / 36%);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 16%);
+  backdrop-filter: blur(18px) saturate(140%);
+  overflow: visible;
+}
+
+body[data-folder-dock] .header .form-control,
+body[data-folder-dock] .header .form-control:not(:focus) {
+  height: 48px;
+  border: 0;
+  border-radius: 24px;
+  color: rgb(255 255 255 / 90%);
+  background: transparent;
+  box-shadow: none;
+}
+
+body[data-folder-dock] .header .form-control::placeholder,
+body[data-folder-dock] .header .form-control:not(:focus)::placeholder {
+  color: rgb(255 255 255 / 62%);
+}
+
+body[data-folder-dock] .header__engine {
+  top: 4px;
+  bottom: 4px;
+}
+
+body[data-folder-dock] .header__engine-button,
+body[data-folder-dock] .has-image .header__engine-button {
+  border-radius: 20px;
+  color: #fff;
+  background: rgb(255 255 255 / 10%);
+}
+
+body[data-folder-dock] .search-actions {
+  right: 7px;
+}
+
+body[data-folder-dock] .search-button {
+  min-width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(255 255 255 / 72%);
+  text-decoration: none;
+}
+
+body[data-folder-dock] .search-button:hover {
+  color: #fff;
+}
+
+.search-settings-link {
+  border-radius: 50%;
+}
+
 .header .form-control {
   transition-property: color, border-color, background-color, backdrop-filter;
   transition-duration: 0.25s;

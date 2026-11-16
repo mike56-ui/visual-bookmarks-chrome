@@ -27,6 +27,8 @@ def package():
     for filename in required:
         if not (build / filename).is_file():
             raise ValueError(f'Missing extension file: {filename}')
+    if 'id="folderDock"' not in (build / 'newtab.html').read_text(encoding='utf-8'):
+        raise ValueError('Missing new folder Dock UI; refusing to release the old interface')
     output = root / 'dist'
     output.mkdir(exist_ok=True)
     archive = output / 'visual-bookmarks-edge.zip'

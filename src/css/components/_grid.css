@@ -29,6 +29,36 @@
   } */
 }
 
+body[data-folder-dock] .container {
+  width: 100%;
+  max-width: none;
+  padding-inline: clamp(24px, 4vw, 64px);
+}
+
+body[data-folder-dock] .grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 28px 20px;
+  align-items: start;
+}
+
+@media (max-width: 1240px) {
+  body[data-folder-dock] .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 920px) {
+  body[data-folder-dock] .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  body[data-folder-dock] .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .hidden-toolbar .grid--vcenter {
   min-height: calc(100vh - 60px);
 }

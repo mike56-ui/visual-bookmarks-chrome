@@ -35,6 +35,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Build and validate installation package
         run: npm run release
+      - name: Check production service worker startup and toolbar action
+        run: node --experimental-vm-modules scripts/smoke_background.cjs
       - name: Read package version
         id: version
         run: node -e "console.log('tag=v' + require('./extension_chrome/manifest.json').version)" >> "$GITHUB_OUTPUT"

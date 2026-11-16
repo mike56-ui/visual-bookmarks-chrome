@@ -2,6 +2,8 @@
 
 可视化书签扩展，支持编辑、搜索和拖拽书签，兼容 Microsoft Edge 和 Google Chrome（Manifest V3）。
 
+当前正式版已接入 `feature/ui-polish-10-grid` 的横向书签和文件夹 Dock 界面，直接管理浏览器原生收藏夹。
+
 ## 下载与安装
 
 **[下载最新安装包](https://github.com/mike56-ui/visual-bookmarks-chrome/releases/latest)**，选择 Assets 中的 `visual-bookmarks-edge.zip`。

@@ -1,0 +1,3080 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visual Bookmarks — Edge 真实书签树导入与模拟环境</title>
+  <style>
+    :root {
+      --color-primary: rgb(0 122 255);
+      --color-primary-dark: rgb(0 98 204);
+      --color-primary-alpha-40: rgb(0 122 255 / 32%);
+      --color-muted: rgb(142 142 147);
+      --color-warning: rgb(255 59 48);
+
+      --apple-glass-bg: rgb(255 255 255 / 68%);
+      --apple-glass-caption: rgb(255 255 255 / 82%);
+      --apple-glass-border: rgb(255 255 255 / 58%);
+      --apple-card-shadow: 0 6px 20px -2px rgb(0 0 0 / 8%), 0 2px 6px -1px rgb(0 0 0 / 5%);
+      --apple-card-hover-shadow: 0 16px 32px -4px rgb(0 0 0 / 16%), 0 6px 12px -2px rgb(0 0 0 / 8%);
+      --apple-spring: cubic-bezier(0.22, 1, 0.36, 1);
+
+      --theme-background: rgb(245 245 247);
+      --theme-background-2: rgb(255 255 255);
+      --theme-background-3: rgb(235 235 240);
+      --theme-text-color: #1d1d1f;
+      --theme-subtext-color: #6e6e73;
+      --theme-invert-alpha-10: rgb(0 0 0 / 7%);
+      --theme-invert-alpha-20: rgb(0 0 0 / 14%);
+
+      --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --base-radius: 16px;
+      --bookmark-radius: 16px;
+      --bookmark-aspect-ratio: 16 / 10;
+      --grid-columns: 6;
+      --grid-gap: 18px;
+      --container-width: 88%;
+      --bg-blur: 0px;
+      color-scheme: light;
+    }
+
+    html.dark {
+      --apple-glass-bg: rgb(36 36 40 / 62%);
+      --apple-glass-caption: rgb(26 26 30 / 80%);
+      --apple-glass-border: rgb(255 255 255 / 14%);
+      --apple-card-shadow: 0 8px 24px -2px rgb(0 0 0 / 42%), 0 2px 8px -1px rgb(0 0 0 / 28%);
+      --apple-card-hover-shadow: 0 18px 36px -4px rgb(0 0 0 / 60%), 0 6px 14px -2px rgb(0 0 0 / 40%);
+
+      --theme-background: rgb(18 18 20);
+      --theme-background-2: rgb(32 32 36);
+      --theme-background-3: rgb(48 48 54);
+      --theme-text-color: #f5f5f7;
+      --theme-subtext-color: #a1a1a6;
+      --theme-invert-alpha-10: rgb(255 255 255 / 10%);
+      --theme-invert-alpha-20: rgb(255 255 255 / 18%);
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-family);
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--theme-text-color);
+      background-color: var(--theme-background);
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .bg {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      transition: background 0.5s ease, filter 0.3s ease;
+      filter: blur(var(--bg-blur));
+      transform: scale(1.04);
+    }
+
+    .bg[data-wallpaper="aurora"] {
+      background:
+        radial-gradient(circle at 18% 20%, rgb(49 104 255 / 45%), transparent 48%),
+        radial-gradient(circle at 82% 24%, rgb(168 85 247 / 40%), transparent 52%),
+        radial-gradient(circle at 50% 80%, rgb(14 165 233 / 35%), transparent 55%),
+        linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #090d16 100%);
+    }
+
+    html:not(.dark) .bg[data-wallpaper="aurora"] {
+      background:
+        radial-gradient(circle at 18% 20%, rgb(96 165 250 / 48%), transparent 48%),
+        radial-gradient(circle at 82% 24%, rgb(232 121 249 / 38%), transparent 52%),
+        radial-gradient(circle at 50% 80%, rgb(56 189 248 / 38%), transparent 55%),
+        linear-gradient(135deg, #e0f2fe 0%, #f3e8ff 50%, #fef3c7 100%);
+    }
+
+    .bg[data-wallpaper="catalina"] {
+      background:
+        radial-gradient(circle at 75% 18%, rgb(251 146 60 / 45%), transparent 45%),
+        radial-gradient(circle at 25% 75%, rgb(59 130 246 / 45%), transparent 55%),
+        linear-gradient(160deg, #1e293b 0%, #334155 48%, #0f172a 100%);
+    }
+
+    .bg[data-wallpaper="minimal"] {
+      background: var(--theme-background);
+    }
+
+    .app {
+      height: 100vh;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+      padding-bottom: 48px;
+    }
+
+    .container {
+      max-width: var(--container-width);
+      margin: 0 auto;
+      padding-inline: 24px;
+      transition: max-width 0.25s var(--apple-spring);
+    }
+
+    /* Floating Left Aside Controls */
+    .aside-controls {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 6px;
+      border-radius: 999px;
+      background: var(--apple-glass-bg);
+      backdrop-filter: blur(20px) saturate(180%);
+      border: 1px solid var(--apple-glass-border);
+      box-shadow: var(--apple-card-shadow);
+      opacity: 0.78;
+      transition: opacity 0.25s var(--apple-spring), transform 0.25s var(--apple-spring);
+    }
+
+    .aside-controls:hover {
+      opacity: 1;
+      transform: scale(1.03);
+    }
+
+    .circ-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border: 0;
+      background: transparent;
+      color: var(--theme-text-color);
+      border-radius: 50%;
+      cursor: pointer;
+      transition: background-color 0.2s ease, transform 0.2s var(--apple-spring);
+    }
+
+    .circ-btn:hover {
+      background: var(--theme-invert-alpha-10);
+    }
+
+    .circ-btn:active {
+      transform: scale(0.92);
+    }
+
+    .circ-btn svg {
+      width: 18px;
+      height: 18px;
+      fill: currentColor;
+    }
+
+    .circ-btn--highlight {
+      color: var(--color-primary);
+    }
+
+    /* Header: Spotlight + Active Tabs Stash + Folder Pills */
+    .header {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 22px 0 12px;
+      z-index: 900;
+    }
+
+    .header__top {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      max-width: 820px;
+    }
+
+    .back-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 46px;
+      height: 46px;
+      flex-shrink: 0;
+      border-radius: 999px;
+      border: 1px solid var(--apple-glass-border);
+      background: var(--apple-glass-bg);
+      backdrop-filter: blur(24px) saturate(180%);
+      color: var(--theme-text-color);
+      box-shadow: var(--apple-card-shadow);
+      cursor: pointer;
+      transition: transform 0.2s var(--apple-spring), background-color 0.2s ease;
+    }
+
+    .back-btn:hover {
+      transform: scale(1.04);
+      background: var(--theme-background-2);
+    }
+
+    .search-wrap {
+      position: relative;
+      flex: 1;
+      width: 100%;
+    }
+
+    .search-input {
+      width: 100%;
+      height: 46px;
+      padding: 0 116px 0 52px;
+      border-radius: 999px;
+      border: 1px solid var(--apple-glass-border);
+      background-color: var(--apple-glass-bg);
+      backdrop-filter: blur(24px) saturate(180%);
+      box-shadow: var(--apple-card-shadow);
+      color: var(--theme-text-color);
+      font-size: 14.5px;
+      outline: none;
+      transition: box-shadow 0.25s var(--apple-spring), border-color 0.2s ease;
+    }
+
+    .search-input::placeholder {
+      color: var(--theme-subtext-color);
+    }
+
+    .search-input:focus {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 4px var(--color-primary-alpha-40), var(--apple-card-hover-shadow);
+    }
+
+    .engine-btn {
+      position: absolute;
+      left: 6px;
+      top: 6px;
+      bottom: 6px;
+      width: 34px;
+      border-radius: 999px;
+      border: 0;
+      background: var(--theme-invert-alpha-10);
+      color: var(--theme-text-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: background-color 0.2s ease, transform 0.2s var(--apple-spring);
+    }
+
+    .engine-btn:hover {
+      background: var(--theme-invert-alpha-20);
+      transform: scale(1.05);
+    }
+
+    .engine-menu {
+      position: absolute;
+      left: 0;
+      top: calc(100% + 8px);
+      min-width: 190px;
+      padding: 6px;
+      border-radius: 14px;
+      background: var(--apple-glass-caption);
+      backdrop-filter: blur(28px) saturate(190%);
+      border: 1px solid var(--apple-glass-border);
+      box-shadow: var(--apple-card-hover-shadow);
+      z-index: 1000;
+    }
+
+    .engine-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      cursor: pointer;
+      color: var(--theme-text-color);
+    }
+
+    .engine-item:hover,
+    .engine-item.is-active {
+      background: var(--theme-invert-alpha-10);
+    }
+
+    .search-actions {
+      position: absolute;
+      right: 12px;
+      top: 0;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .search-settings-btn {
+      width: 30px;
+      height: 30px;
+      border: 0;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--theme-subtext-color);
+      background: transparent;
+      cursor: pointer;
+      transition: color .18s ease, background-color .18s ease, transform .18s var(--apple-spring);
+    }
+
+    .search-settings-btn:hover {
+      color: var(--theme-text-color);
+      background: var(--theme-invert-alpha-10);
+      transform: rotate(12deg);
+    }
+
+    .search-settings-btn svg {
+      width: 17px;
+      height: 17px;
+      fill: currentColor;
+    }
+
+    .search-kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 22px;
+      padding: 0 7px;
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      color: var(--theme-subtext-color);
+      background: var(--theme-invert-alpha-10);
+      pointer-events: none;
+    }
+
+    .search-reset {
+      border: 0;
+      background: var(--theme-invert-alpha-10);
+      color: var(--theme-text-color);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+    }
+
+    /* Open Tabs Pill & Import Button */
+    .header__tabs-widget {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .tabs-pill-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 46px;
+      padding: 0 15px;
+      border-radius: 999px;
+      border: 1px solid var(--apple-glass-border);
+      background: var(--apple-glass-bg);
+      backdrop-filter: blur(24px) saturate(180%);
+      color: var(--theme-text-color);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      box-shadow: var(--apple-card-shadow);
+      transition: transform 0.2s var(--apple-spring), background-color 0.2s ease;
+    }
+
+    .tabs-pill-btn:hover {
+      transform: translateY(-1px);
+      background: var(--theme-background-2);
+    }
+
+    .tabs-pill-btn--import {
+      border-color: var(--color-primary-alpha-40);
+    }
+
+    .tabs-pill-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #30d158;
+      box-shadow: 0 0 8px #30d158;
+    }
+
+    .tabs-popover {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 10px);
+      width: 390px;
+      max-width: 92vw;
+      max-height: 420px;
+      display: flex;
+      flex-direction: column;
+      border-radius: 18px;
+      background: var(--apple-glass-caption);
+      backdrop-filter: blur(30px) saturate(190%);
+      border: 1px solid var(--apple-glass-border);
+      box-shadow: var(--apple-card-hover-shadow);
+      overflow: hidden;
+      z-index: 1200;
+    }
+
+    .tabs-popover__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--theme-invert-alpha-10);
+    }
+
+    .tabs-popover__title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .tabs-popover__actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tabs-action-btn {
+      border: 0;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      background: var(--theme-invert-alpha-10);
+      color: var(--theme-text-color);
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+
+    .tabs-action-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .tabs-action-btn--primary {
+      background: var(--color-primary);
+      color: #fff;
+    }
+
+    .tabs-popover__list {
+      overflow-y: auto;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .tabs-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }
+
+    .tabs-item:hover {
+      background: var(--theme-invert-alpha-10);
+    }
+
+    .tabs-item__badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--theme-invert-alpha-10);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .tabs-item__info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .tabs-item__title {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tabs-item__url {
+      font-size: 11px;
+      color: var(--theme-subtext-color);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tabs-item__close {
+      border: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--theme-subtext-color);
+      font-size: 15px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .tabs-item__close:hover {
+      background: var(--theme-invert-alpha-20);
+      color: var(--theme-text-color);
+    }
+
+    /* Segmented Folder Pills Bar */
+    .header__pills-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .folder-pills {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow-x: auto;
+      max-width: calc(100% - 190px);
+      padding: 4px 6px;
+      scrollbar-width: none;
+    }
+
+    .folder-pills::-webkit-scrollbar {
+      display: none;
+    }
+
+    .folder-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 34px;
+      padding: 0 14px;
+      border-radius: 999px;
+      border: 1px solid var(--apple-glass-border);
+      background: var(--apple-glass-bg);
+      backdrop-filter: blur(20px) saturate(180%);
+      color: var(--theme-text-color);
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      box-shadow: var(--apple-card-shadow);
+      transition: all 0.2s var(--apple-spring);
+    }
+
+    .folder-pill:hover {
+      transform: translateY(-1px);
+      background: var(--theme-background-2);
+    }
+
+    .folder-pill.is-active {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      color: #fff;
+      box-shadow: 0 4px 14px var(--color-primary-alpha-40);
+    }
+
+    .folder-pill.is-drop-target {
+      outline: 2px solid var(--color-primary);
+      transform: scale(1.06);
+    }
+
+    .folder-pill__badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--theme-invert-alpha-10);
+    }
+
+    .folder-pill.is-active .folder-pill__badge {
+      background: rgb(255 255 255 / 24%);
+      color: #fff;
+    }
+
+    .folder-select {
+      height: 34px;
+      width: 175px;
+      padding: 0 24px 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--apple-glass-border);
+      background: var(--apple-glass-bg);
+      backdrop-filter: blur(20px) saturate(180%);
+      color: var(--theme-text-color);
+      font-size: 12.5px;
+      outline: none;
+      cursor: pointer;
+      box-shadow: var(--apple-card-shadow);
+      flex-shrink: 0;
+    }
+
+    /* The original folder pills become a macOS-Dock-like movable folder rail. */
+    .folder-sidebar {
+      position: fixed;
+      z-index: 920;
+      padding: 10px;
+      border: 1px solid var(--apple-glass-border);
+      border-radius: 22px;
+      background: var(--apple-glass-bg);
+      box-shadow: var(--apple-card-shadow);
+      backdrop-filter: blur(24px) saturate(180%);
+      transition: inset 0.28s var(--apple-spring), width 0.28s var(--apple-spring), height 0.28s var(--apple-spring), transform 0.18s ease;
+    }
+
+    .folder-sidebar[data-dock="left"] {
+      top: 16px;
+      bottom: 16px;
+      left: 72px;
+      width: 224px;
+    }
+
+    .folder-sidebar[data-dock="right"] {
+      top: 16px;
+      right: 16px;
+      bottom: 16px;
+      width: 224px;
+    }
+
+    .folder-sidebar[data-dock="bottom"] {
+      right: 16px;
+      bottom: 16px;
+      left: 72px;
+      height: 86px;
+      padding-top: 18px;
+    }
+
+    .folder-sidebar.is-moving {
+      opacity: 0.88;
+      transition: none;
+    }
+
+    .folder-dock-handle {
+      position: absolute;
+      top: 5px;
+      left: 50%;
+      width: 40px;
+      height: 10px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--theme-invert-alpha-20);
+      transform: translateX(-50%);
+      cursor: grab;
+      touch-action: none;
+    }
+
+    .folder-dock-handle:active { cursor: grabbing; }
+
+    .folder-dock-handle::after {
+      content: "";
+      position: absolute;
+      inset: -6px -12px;
+    }
+
+    .folder-sidebar .header__pills-bar {
+      height: calc(100% - 12px);
+      margin-top: 12px;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+    }
+
+    .folder-sidebar .folder-pills {
+      min-height: 0;
+      max-width: none;
+      flex: 1;
+      flex-direction: column;
+      align-items: stretch;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 2px;
+      scrollbar-width: thin;
+    }
+
+    .folder-sidebar .folder-pill {
+      width: 100%;
+      flex: 0 0 auto;
+      justify-content: space-between;
+    }
+
+    .folder-sidebar .folder-select {
+      width: 100%;
+      flex: 0 0 auto;
+    }
+
+    body[data-folder-dock="left"] .app {
+      padding-left: 296px;
+    }
+
+    body[data-folder-dock="right"] .app {
+      padding-right: 240px;
+    }
+
+    body[data-folder-dock="bottom"] .app {
+      padding-bottom: 110px;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .header__pills-bar {
+      height: 100%;
+      margin-top: 0;
+      flex-direction: row;
+      align-items: center;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .folder-pills {
+      min-width: 0;
+      flex-direction: row;
+      align-items: center;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .folder-pill {
+      width: auto;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .folder-select {
+      width: 175px;
+    }
+
+    @media (max-width: 980px) {
+      .folder-sidebar[data-dock="left"] {
+        left: 64px;
+        width: 196px;
+      }
+
+      .folder-sidebar[data-dock="right"] {
+        width: 196px;
+      }
+
+      body[data-folder-dock="left"] .app {
+        padding-left: 260px;
+      }
+
+      body[data-folder-dock="right"] .app {
+        padding-right: 212px;
+      }
+    }
+
+    /* Compact folder manager: the original 2x2 preview, now living in the dock. */
+    .folder-sidebar[data-dock="left"],
+    .folder-sidebar[data-dock="right"] {
+      width: 252px;
+    }
+
+    .folder-sidebar[data-dock="left"] { left: 16px; }
+
+    .folder-sidebar[data-dock="bottom"] {
+      left: 16px;
+      height: 126px;
+    }
+
+    body[data-folder-dock="left"] .app { padding-left: 284px; }
+    body[data-folder-dock="right"] .app { padding-right: 268px; }
+    body[data-folder-dock="bottom"] .app { padding-bottom: 150px; }
+
+    .folder-toolbar {
+      position: absolute;
+      top: 15px;
+      right: 12px;
+      left: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 30px;
+      padding-left: 4px;
+      z-index: 3;
+    }
+
+    .folder-toolbar__title {
+      color: var(--theme-text-color);
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: .02em;
+      opacity: .72;
+    }
+
+    .folder-toolbar__add {
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--apple-glass-border);
+      border-radius: 9px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--theme-text-color);
+      background: var(--theme-invert-alpha-10);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      transition: transform .18s var(--apple-spring), background-color .18s ease;
+    }
+
+    .folder-toolbar__add:hover {
+      background: var(--color-primary);
+      color: #fff;
+      transform: scale(1.06);
+    }
+
+    .folder-sidebar .header__pills-bar {
+      height: calc(100% - 48px);
+      margin-top: 42px;
+    }
+
+    .folder-sidebar .folder-pills {
+      gap: 8px;
+      padding: 2px 3px 8px;
+    }
+
+    .folder-sidebar .folder-select { display: none; }
+
+    .folder-card {
+      position: relative;
+      width: 100%;
+      min-height: 94px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 7px;
+      padding: 8px;
+      border: 1px solid var(--apple-glass-border);
+      border-radius: 16px;
+      color: var(--theme-text-color);
+      background: rgb(20 22 31 / 34%);
+      box-shadow: 0 8px 20px rgb(0 0 0 / 8%);
+      backdrop-filter: blur(20px) saturate(175%);
+      cursor: pointer;
+      transition: transform .2s var(--apple-spring), border-color .2s ease, background-color .2s ease;
+      flex: 0 0 auto;
+    }
+
+    .folder-card:hover {
+      transform: translateY(-1px);
+      background: var(--theme-background-2);
+      border-color: rgb(255 255 255 / 24%);
+    }
+
+    .folder-card.is-active {
+      background: linear-gradient(135deg, var(--color-primary), #6f57ff);
+      border-color: rgb(255 255 255 / 26%);
+      color: #fff;
+      box-shadow: 0 9px 24px var(--color-primary-alpha-40);
+    }
+
+    .folder-card.is-drop-target {
+      border-color: #fff;
+      box-shadow: 0 0 0 3px var(--color-primary-alpha-40), 0 12px 28px rgb(0 0 0 / 18%);
+      transform: scale(1.025);
+    }
+
+    .folder-card__preview {
+      width: 100%;
+      height: 52px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-rows: repeat(2, 1fr);
+      gap: 3px;
+      padding: 5px;
+      border-radius: 13px;
+      background: rgb(255 255 255 / 10%);
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%);
+      pointer-events: none;
+    }
+
+    .folder-card__thumb {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 5px;
+      background: rgb(255 255 255 / 14%);
+      overflow: hidden;
+    }
+
+    .folder-card__thumb img {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      object-fit: contain;
+    }
+
+    .folder-card__thumb--empty { opacity: .42; }
+
+    .folder-card__copy {
+      min-width: 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 2px;
+    }
+
+    .folder-card__title {
+      display: -webkit-box;
+      flex: 1;
+      overflow: hidden;
+      color: inherit;
+      font-size: 12.5px;
+      font-weight: 650;
+      line-height: 1.3;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .folder-card__count {
+      display: inline-flex;
+      flex: 0 0 auto;
+      margin-top: 1px;
+      color: currentColor;
+      font-size: 11px;
+      opacity: .62;
+    }
+
+    .folder-card__delete {
+      position: absolute;
+      top: 13px;
+      right: 13px;
+      z-index: 4;
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgb(255 255 255 / 18%);
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      background: rgb(16 17 24 / 58%);
+      backdrop-filter: blur(10px);
+      cursor: pointer;
+      opacity: 0;
+      transform: scale(.9);
+      transition: opacity .16s ease, transform .18s var(--apple-spring), background-color .16s ease;
+    }
+
+    .folder-card:hover .folder-card__delete {
+      opacity: .86;
+      transform: scale(1);
+    }
+
+    .folder-card__delete:hover {
+      opacity: 1;
+      background: rgb(210 55 70 / 88%);
+    }
+
+    .folder-card__delete svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+
+    .folder-card__more {
+      width: 26px;
+      height: 26px;
+      border: 0;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: inherit;
+      background: transparent;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity .16s ease, background-color .16s ease;
+    }
+
+    .folder-card:hover .folder-card__more,
+    .folder-card.is-menu-open .folder-card__more { opacity: .8; }
+
+    .folder-card__more:hover { background: rgb(255 255 255 / 14%); opacity: 1; }
+
+    .folder-card__menu {
+      position: absolute;
+      top: 42px;
+      right: 8px;
+      z-index: 8;
+      width: 112px;
+      padding: 5px;
+      border: 1px solid var(--apple-glass-border);
+      border-radius: 11px;
+      background: rgb(24 25 34 / 92%);
+      box-shadow: 0 14px 34px rgb(0 0 0 / 28%);
+      backdrop-filter: blur(22px) saturate(180%);
+    }
+
+    .folder-card__menu button {
+      width: 100%;
+      height: 30px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 7px;
+      color: #fff;
+      background: transparent;
+      text-align: left;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .folder-card__menu button:hover { background: rgb(255 255 255 / 12%); }
+    .folder-card__menu .is-danger { color: #ff8d95; }
+
+    .folder-card__rename {
+      width: 100%;
+      height: 28px;
+      padding: 0 8px;
+      border: 1px solid rgb(255 255 255 / 32%);
+      border-radius: 8px;
+      outline: none;
+      color: inherit;
+      background: rgb(0 0 0 / 18%);
+      font: inherit;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .folder-toolbar {
+      right: auto;
+      width: 104px;
+      top: 38px;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .header__pills-bar {
+      height: 100%;
+      margin: 0 0 0 112px;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .folder-card {
+      width: 210px;
+      min-height: 92px;
+      display: flex;
+      padding: 7px;
+    }
+
+    .folder-sidebar[data-dock="bottom"] .folder-card__preview {
+      width: 100%;
+      height: 48px;
+    }
+
+    @media (max-width: 980px) {
+      .folder-sidebar[data-dock="left"],
+      .folder-sidebar[data-dock="right"] { width: 224px; }
+      .folder-sidebar[data-dock="left"] { left: 12px; }
+      body[data-folder-dock="left"] .app { padding-left: 252px; }
+      body[data-folder-dock="right"] .app { padding-right: 240px; }
+    }
+
+    /* Bookmarks Grid — External Safari Caption + 100% Pure Stage + Drag & Drop */
+    .content {
+      padding: 16px 0 32px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(var(--grid-columns), minmax(120px, 1fr));
+      gap: var(--grid-gap);
+      justify-content: center;
+    }
+
+    @media (max-width: 900px) {
+      .grid {
+        grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+      }
+    }
+
+    .bookmark {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      text-decoration: none;
+      color: inherit;
+      cursor: grab;
+      transition: transform 0.22s var(--apple-spring), opacity 0.2s ease;
+    }
+
+    .bookmark:active {
+      cursor: grabbing;
+    }
+
+    .bookmark.is-dragging {
+      opacity: 0.35;
+      transform: scale(0.94);
+    }
+
+    .bookmark.is-folder-drop-target .bookmark__stage {
+      outline: 2px solid var(--color-primary);
+      box-shadow: 0 0 0 5px var(--color-primary-alpha-40), var(--apple-card-hover-shadow);
+      transform: scale(1.04);
+    }
+
+    .bookmark__stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: var(--bookmark-aspect-ratio);
+      display: flex;
+      flex-direction: column;
+      background-color: var(--apple-glass-bg);
+      backdrop-filter: blur(20px) saturate(180%);
+      border-radius: var(--bookmark-radius);
+      outline: 1px solid var(--apple-glass-border);
+      outline-offset: -1px;
+      box-shadow: var(--apple-card-shadow);
+      overflow: hidden;
+      transition: transform 0.28s var(--apple-spring), box-shadow 0.28s var(--apple-spring), outline-color 0.2s ease;
+    }
+
+    .grid:not(.has-dragging) .bookmark:hover .bookmark__stage {
+      transform: translateY(-4px) scale(1.015);
+      box-shadow: var(--apple-card-hover-shadow);
+      outline-color: var(--color-primary-alpha-40);
+    }
+
+    .grid:not(.has-dragging) .bookmark:active .bookmark__stage {
+      transform: translateY(-1px) scale(0.985);
+    }
+
+    .bookmark__img {
+      flex-grow: 1;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background-size: cover;
+      background-position: center top;
+      background-repeat: no-repeat;
+      overflow: hidden;
+    }
+
+    .bookmark__logo-badge {
+      position: relative;
+      z-index: 2;
+      width: 46px;
+      height: 46px;
+      border-radius: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgb(255 255 255 / 18%);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgb(255 255 255 / 26%);
+      box-shadow: 0 6px 16px rgb(0 0 0 / 12%);
+      font-size: 18px;
+      font-weight: 700;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .bookmark__screenshot {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: top center;
+      opacity: 0;
+      transition: opacity 0.28s ease;
+    }
+
+    /* Keep the calm frosted logo card by default; reveal the live thumbnail on hover. */
+    .bookmark__img.has-screenshot .bookmark__screenshot { opacity: 0; }
+
+    .grid:not(.has-dragging) .bookmark:hover .bookmark__img.has-screenshot .bookmark__screenshot {
+      opacity: 1;
+    }
+
+    .grid:not(.has-dragging) .bookmark:hover .bookmark__img.has-screenshot .bookmark__logo-badge {
+      opacity: 0;
+      transform: scale(.88);
+    }
+
+    .bookmark__logo-badge {
+      transition: opacity .22s ease, transform .24s var(--apple-spring);
+    }
+
+    .bookmark__logo-badge img {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      object-fit: contain;
+    }
+
+    /* Bento 2x2 Folder Preview */
+    .bookmark__summary-folder {
+      flex-grow: 1;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      grid-template-rows: repeat(2, 1fr);
+      gap: 6px;
+      padding: 10px;
+      pointer-events: none;
+    }
+
+    .bookmark__img--children {
+      border-radius: 8px;
+      background-color: var(--theme-invert-alpha-10);
+      box-shadow: inset 0 0 0 1px var(--apple-glass-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      overflow: hidden;
+    }
+
+    .bookmark__img--children img {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+    }
+
+    /* Safari-style External Two-Line Smart Caption (Clean Title + Domain) */
+    .bookmark__caption {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1px;
+      padding: 0 4px;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .bookmark__caption-main {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      max-width: 100%;
+    }
+
+    .bookmark__favicon {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      object-fit: contain;
+    }
+
+    .bookmark__title {
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .bookmark__domain {
+      font-size: 11px;
+      line-height: 1.2;
+      color: var(--theme-subtext-color);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+
+    .bookmark__domain--primary {
+      color: var(--theme-text-color);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .bookmark__description {
+      width: 100%;
+      margin-top: 0;
+      overflow: hidden;
+      color: var(--theme-text-color);
+      font-size: 12.5px;
+      font-weight: 600;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bookmark__in-card-domain {
+      position: relative;
+      z-index: 5;
+      width: 100%;
+      min-height: 28px;
+      padding: 0 10px;
+      border-top: 1px solid rgb(255 255 255 / 4%);
+      display: block;
+      overflow: hidden;
+      color: color-mix(in srgb, var(--theme-text-color) 80%, transparent);
+      background: rgb(255 255 255 / 6%);
+      backdrop-filter: blur(7px) saturate(125%);
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 28px;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bookmark__delete {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 24;
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgb(255 255 255 / 28%);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      background: rgb(22 23 30 / 54%);
+      box-shadow: 0 4px 12px rgb(0 0 0 / 14%);
+      backdrop-filter: blur(10px);
+      font-size: 17px;
+      font-weight: 400;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0;
+      transform: scale(.88);
+      transition: opacity .16s ease, transform .18s var(--apple-spring), background-color .16s ease;
+    }
+
+    .bookmark:hover .bookmark__delete {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    .bookmark__delete:hover {
+      border-color: rgb(255 255 255 / 42%);
+      background: rgb(210 55 70 / 88%);
+    }
+
+    .bookmark.is-selected .bookmark__stage {
+      outline: 2px solid var(--color-primary);
+      box-shadow: 0 0 0 4px var(--color-primary-alpha-40), var(--apple-card-hover-shadow);
+    }
+
+    .bookmark.is-group-dragging { opacity: .3; }
+
+    .selection-toolbar {
+      position: sticky;
+      top: 14px;
+      z-index: 80;
+      width: max-content;
+      min-height: 38px;
+      margin: -4px auto 14px;
+      padding: 5px 6px 5px 14px;
+      border: 1px solid var(--apple-glass-border);
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--theme-text-color);
+      background: rgb(25 26 35 / 72%);
+      box-shadow: 0 12px 30px rgb(0 0 0 / 20%);
+      backdrop-filter: blur(22px) saturate(180%);
+    }
+
+    .selection-toolbar__count {
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .selection-toolbar button {
+      height: 28px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 999px;
+      color: var(--theme-text-color);
+      background: var(--theme-invert-alpha-10);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .selection-toolbar button:hover { background: var(--theme-invert-alpha-20); }
+
+    .bookmark-btn--create {
+      cursor: pointer;
+    }
+
+    .bookmark-btn--create .bookmark__stage {
+      border: 1px dashed var(--apple-glass-border);
+      background: var(--apple-glass-bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: var(--theme-subtext-color);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    /* Live Inspector Drawer */
+    .inspector-drawer {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      bottom: 16px;
+      width: 320px;
+      z-index: 1200;
+      border-radius: 20px;
+      background: var(--apple-glass-caption);
+      backdrop-filter: blur(32px) saturate(190%);
+      border: 1px solid var(--apple-glass-border);
+      box-shadow: var(--apple-card-hover-shadow);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      transform: translateX(calc(100% + 24px));
+      transition: transform 0.32s var(--apple-spring);
+      overflow-y: auto;
+    }
+
+    .inspector-drawer.is-open {
+      transform: translateX(0);
+    }
+
+    .inspector-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--theme-invert-alpha-10);
+    }
+
+    .inspector-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .inspector-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .inspector-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--theme-subtext-color);
+    }
+
+    .inspector-range {
+      width: 100%;
+      accent-color: var(--color-primary);
+      cursor: pointer;
+    }
+
+    .segmented-control {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 3px;
+      border-radius: 10px;
+      background: var(--theme-invert-alpha-10);
+    }
+
+    .segmented-btn {
+      border: 0;
+      background: transparent;
+      color: var(--theme-text-color);
+      padding: 6px 8px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+
+    .segmented-btn.is-active {
+      background: var(--theme-background-2);
+      box-shadow: 0 2px 6px rgb(0 0 0 / 12%);
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      padding: 10px 18px;
+      border-radius: 999px;
+      background: var(--apple-glass-caption);
+      backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid var(--apple-glass-border);
+      box-shadow: var(--apple-card-hover-shadow);
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s var(--apple-spring);
+      z-index: 2000;
+    }
+
+    .toast.is-visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .toast.has-action {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      pointer-events: auto;
+    }
+
+    .toast__undo {
+      height: 26px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--color-primary);
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgb(0 0 0 / 45%);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1500;
+    }
+
+    .modal-card {
+      width: 100%;
+      max-width: 440px;
+      padding: 22px;
+      border-radius: 20px;
+      background: var(--apple-glass-caption);
+      backdrop-filter: blur(30px) saturate(190%);
+      border: 1px solid var(--apple-glass-border);
+      box-shadow: var(--apple-card-hover-shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .modal-input {
+      width: 100%;
+      height: 38px;
+      padding: 0 12px;
+      border-radius: 10px;
+      border: 1px solid var(--apple-glass-border);
+      background: var(--theme-background-2);
+      color: var(--theme-text-color);
+      font-size: 13.5px;
+      outline: none;
+    }
+
+    .drop-import-zone {
+      border: 2px dashed var(--color-primary-alpha-40);
+      border-radius: 14px;
+      padding: 24px 16px;
+      text-align: center;
+      background: var(--theme-invert-alpha-10);
+      cursor: pointer;
+      transition: border-color 0.2s ease, background-color 0.2s ease;
+    }
+
+    .drop-import-zone:hover,
+    .drop-import-zone.is-dragover {
+      border-color: var(--color-primary);
+      background: var(--color-primary-alpha-40);
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .btn {
+      padding: 7px 16px;
+      border-radius: 10px;
+      border: 0;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .btn--ghost {
+      background: var(--theme-invert-alpha-10);
+      color: var(--theme-text-color);
+    }
+
+    .btn--primary {
+      background: var(--color-primary);
+      color: #fff;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body data-folder-dock="left">
+  <div class="bg" id="bgLayer" data-wallpaper="aurora"></div>
+
+  <!-- Hidden file input for real Edge/Chrome bookmarks.html or Bookmarks JSON -->
+  <input type="file" id="realBookmarksFileInput" accept=".html,.htm,.json" hidden />
+
+  <aside class="folder-sidebar" id="folderDock" data-dock="left" aria-label="书签文件夹">
+    <button class="folder-dock-handle" id="folderDockHandle" type="button" aria-label="拖动文件夹栏到左侧、右侧或底部" title="拖动文件夹栏到左侧、右侧或底部"></button>
+    <div class="folder-toolbar">
+      <span class="folder-toolbar__title">文件夹</span>
+      <button class="folder-toolbar__add" id="newFolderBtn" type="button" aria-label="新建文件夹" title="新建文件夹">+</button>
+    </div>
+    <div class="header__pills-bar">
+      <nav class="folder-pills" id="folderPills" aria-label="书签文件夹"></nav>
+      <select class="folder-select" id="folderSelect" aria-label="全部文件夹目录树"></select>
+    </div>
+  </aside>
+
+  <main class="app" id="appRoot">
+    <div class="container">
+      <header class="header">
+        <div class="header__top">
+          <button class="back-btn" id="backFolderBtn" title="返回上级目录" hidden>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          </button>
+
+          <div class="search-wrap">
+            <form id="searchForm">
+              <input
+                type="text"
+                id="bookmarkSearch"
+                class="search-input"
+                placeholder="Search"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </form>
+
+            <button type="button" class="engine-btn" id="engineBtn" title="切换搜索引擎">
+              <span id="engineIcon">★</span>
+            </button>
+
+            <div class="engine-menu" id="engineMenu" hidden>
+              <div class="engine-item is-active" data-engine="bookmarks"><span>★ 书签与已开标签</span></div>
+              <div class="engine-item" data-engine="google"><span>G Google 搜索</span></div>
+              <div class="engine-item" data-engine="bing"><span>B Bing 搜索</span></div>
+            </div>
+
+            <div class="search-actions">
+              <kbd class="search-kbd" id="searchKbd">/</kbd>
+              <button type="button" class="search-reset" id="searchReset" title="清空搜索 (Esc)" hidden>×</button>
+              <button type="button" class="search-settings-btn" id="openInspectorBtn" title="设置" aria-label="打开设置">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Active Open Tabs & Import Real Edge Bookmarks -->
+          <div class="header__tabs-widget" id="openTabsWidget" hidden>
+            <button type="button" class="tabs-pill-btn tabs-pill-btn--import" id="topImportBtn" title="导入你本机 Edge 导出的 bookmarks.html 或 Bookmarks JSON">
+              <span>📥 导入 Edge 书签</span>
+            </button>
+            <button type="button" class="tabs-pill-btn" id="openTabsBtn">
+              <span class="tabs-pill-dot"></span>
+              <span id="openTabsCount">6 个已开标签</span>
+            </button>
+            <div class="tabs-popover" id="openTabsPopover" hidden>
+              <div class="tabs-popover__header">
+                <span class="tabs-popover__title">当前窗口已打开标签页</span>
+                <div class="tabs-popover__actions">
+                  <button type="button" class="tabs-action-btn" id="dedupeTabsBtn" title="一键关闭重复打开的相同网址">去重</button>
+                  <button type="button" class="tabs-action-btn tabs-action-btn--primary" id="stashTabsBtn" title="将当前打开的标签页一键存为临时书签夹并释放内存">⚡ 一键暂存收纳</button>
+                </div>
+              </div>
+              <div class="tabs-popover__list" id="openTabsList"></div>
+            </div>
+          </div>
+        </div>
+
+      </header>
+
+      <div class="content">
+        <div class="selection-toolbar" id="selectionToolbar" hidden>
+          <span class="selection-toolbar__count" id="selectionCount">已选 0 项</span>
+          <button type="button" id="selectAllBtn">全选当前页</button>
+          <button type="button" id="clearSelectionBtn">取消</button>
+        </div>
+        <div class="grid" id="bookmarksGrid"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Live Inspector Sheet -->
+  <aside class="inspector-drawer" id="inspectorDrawer" aria-label="外观与网格实时调节">
+    <div class="inspector-header">
+      <span class="inspector-title">外观与网格实时预览</span>
+      <button class="search-reset" id="closeInspectorBtn" title="关闭">×</button>
+    </div>
+
+    <div class="inspector-group">
+      <div class="inspector-label"><span>颜色主题 (零闪烁同步)</span></div>
+      <div class="segmented-control" id="themeSegmented">
+        <button type="button" class="segmented-btn" data-theme="light">浅色</button>
+        <button type="button" class="segmented-btn is-active" data-theme="dark">深色</button>
+        <button type="button" class="segmented-btn" data-theme="os">跟随系统</button>
+      </div>
+    </div>
+
+    <div class="inspector-group">
+      <div class="inspector-label"><span>书签数据</span></div>
+      <button type="button" class="btn btn--ghost" id="settingsImportBtn" style="width: 100%;">📥 导入 Edge 书签</button>
+    </div>
+
+    <div class="inspector-group">
+      <div class="inspector-label"><span>背景壁纸氛围</span></div>
+      <div class="segmented-control" id="wallpaperSegmented">
+        <button type="button" class="segmented-btn is-active" data-wp="aurora">极光毛玻璃</button>
+        <button type="button" class="segmented-btn" data-wp="catalina">暮光海岸</button>
+        <button type="button" class="segmented-btn" data-wp="minimal">纯净纯色</button>
+      </div>
+    </div>
+
+    <div class="inspector-group">
+      <div class="inspector-label">
+        <span>每行书签列数 (dial_columns)</span>
+        <strong id="colCountVal">6 列</strong>
+      </div>
+      <input type="range" class="inspector-range" id="colRange" min="3" max="8" step="1" value="6" />
+    </div>
+
+    <div class="inspector-group">
+      <div class="inspector-label">
+        <span>网格容器宽度 (dial_width)</span>
+        <strong id="widthVal">88%</strong>
+      </div>
+      <input type="range" class="inspector-range" id="widthRange" min="60" max="98" step="2" value="88" />
+    </div>
+
+    <div class="inspector-group">
+      <div class="inspector-label">
+        <span>卡片圆角曲率 (--bookmark-radius)</span>
+        <strong id="radiusVal">16px</strong>
+      </div>
+      <input type="range" class="inspector-range" id="radiusRange" min="6" max="26" step="2" value="16" />
+    </div>
+
+    <div class="inspector-group">
+      <div class="inspector-label"><span>卡片宽高比 (--bookmark-aspect-ratio)</span></div>
+      <div class="segmented-control" id="ratioSegmented">
+        <button type="button" class="segmented-btn" data-ratio="4 / 3">4 : 3 标准</button>
+        <button type="button" class="segmented-btn" data-ratio="16 / 9">16 : 9 宽屏</button>
+        <button type="button" class="segmented-btn is-active" data-ratio="16 / 10">16 : 10 黄金</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Import Real Edge Bookmarks Modal -->
+  <div class="modal-backdrop" id="importModal" hidden>
+    <div class="modal-card">
+      <div class="inspector-title">导入本机 Edge 浏览器真实书签树</div>
+      <p style="font-size: 12.5px; color: var(--theme-subtext-color); line-height: 1.5;">
+        支持直接导入从 Edge (`edge://favorites` → 导出书签) 导出的 <strong>.html</strong> 文件，或 Edge 用户目录下的 <strong>Bookmarks (JSON)</strong> 原始树文件。所有多级文件夹层级、网站图标与标题将 1:1 真实还原。
+      </p>
+      <div class="drop-import-zone" id="dropImportZone">
+        <div style="font-size: 24px; margin-bottom: 6px;">📂</div>
+        <div style="font-size: 13.5px; font-weight: 500;">点击选择或将 Edge 书签文件拖入此处</div>
+        <div style="font-size: 11.5px; color: var(--theme-subtext-color); margin-top: 4px;">支持 bookmarks_*.html 或 Chromium Bookmarks JSON</div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn--ghost" id="loadStressSampleBtn" title="加载包含多级嵌套子文件夹的 60+ 真实常用书签树">加载深度真实书签树预设</button>
+        <button type="button" class="btn btn--ghost" id="closeImportModalBtn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Bookmark Modal -->
+  <div class="modal-backdrop" id="addModal" hidden>
+    <form class="modal-card" id="addBookmarkForm">
+      <div class="inspector-title">新增视觉书签</div>
+      <input type="text" class="modal-input" id="newBmTitle" placeholder="网站标题" required />
+      <input type="url" class="modal-input" id="newBmUrl" placeholder="网址 (如：https://github.com)" required />
+      <div class="modal-actions">
+        <button type="button" class="btn btn--ghost" id="cancelModalBtn">取消</button>
+        <button type="submit" class="btn btn--primary">保存书签</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="toast" id="toastEl"></div>
+
+  <script>
+    function getAmbientGradient(url = '') {
+      let hash = 0;
+      for (let i = 0; i < url.length; i++) {
+        hash = ((hash << 5) - hash) + url.charCodeAt(i);
+        hash |= 0;
+      }
+      const hue1 = Math.abs(hash) % 360;
+      const hue2 = (hue1 + 38) % 360;
+      return `radial-gradient(circle at 30% 25%, hsl(${hue1}deg 72% 60% / 38%), hsl(${hue2}deg 64% 46% / 18%) 78%, transparent 100%)`;
+    }
+
+    function getDomain(url = '') {
+      try {
+        return new URL(url).hostname.replace(/^www\./i, '');
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function getFaviconImgUrl(url = '', size = 64) {
+      const domain = getDomain(url);
+      if (!domain) return '';
+      return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=${size}`;
+    }
+
+    function getScreenshotUrl(url = '') {
+      if (!url) return '';
+      return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(url)}?w=640&h=400`;
+    }
+
+    function parseSmartTitle(rawTitle = '', url = '', isFolder = false) {
+      const cleanRaw = (rawTitle || '').trim();
+      if (isFolder) return { primary: cleanRaw || '文件夹', domain: '' };
+      const domain = getDomain(url);
+      const parts = cleanRaw.split(/\s+(?:[-|—–·:]|\|)\s+/).map(s => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const first = parts[0].replace(/^\(\d+\)\s*/, '');
+        return { primary: first.length >= 2 ? first : parts[1], domain };
+      }
+      return { primary: cleanRaw.replace(/^\(\d+\)\s*/, '') || domain || 'Untitled', domain };
+    }
+
+    function escapeHtml(value = '') {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    let OPEN_TABS = [
+      { id: 901, title: 'mike56-ui/visual-bookmarks-chrome - GitHub', url: 'https://github.com/mike56-ui/visual-bookmarks-chrome', icon: 'GH' },
+      { id: 902, title: 'mike56-ui/visual-bookmarks-chrome - GitHub (重复打开)', url: 'https://github.com/mike56-ui/visual-bookmarks-chrome', icon: 'GH' },
+      { id: 903, title: 'ChatGPT — OpenAI', url: 'https://chatgpt.com', icon: 'AI' },
+      { id: 904, title: 'V2EX — 创意工作者社区', url: 'https://www.v2ex.com', icon: 'V2' },
+      { id: 905, title: '哔哩哔哩 (゜-゜)つロ 干杯~ - bilibili', url: 'https://www.bilibili.com', icon: 'TV' },
+      { id: 906, title: 'Three.js – JavaScript 3D Library', url: 'https://threejs.org', icon: '3D' }
+    ];
+
+    // Authentic Edge Chromium multi-level bookmark tree (`收藏夹栏` = '1', `其他收藏夹` = '2', plus nested sub-folders)
+    let FOLDERS_DATA = [
+      {
+        id: '1',
+        title: '收藏夹栏',
+        parentId: '0',
+        depth: 0,
+        items: [
+          { id: 'f-ai', title: 'AI 与大模型', isFolder: true },
+          { id: 'f-dev', title: '前端与开源架构', isFolder: true },
+          { id: 'f-arjs', title: 'AR.js 与 WebXR 3D', isFolder: true },
+          { id: 'f-design', title: 'Apple & UI 设计规范', isFolder: true },
+          { id: 'f-media', title: '社区与极客资讯', isFolder: true },
+          { id: '101', title: 'mike56-ui/visual-bookmarks-chrome: Simple visual bookmarks extension - GitHub', url: 'https://github.com/mike56-ui/visual-bookmarks-chrome', icon: 'GH' },
+          { id: '102', title: 'Google Gemini — 个人 AI 工作台', url: 'https://gemini.google.com', icon: '✦' },
+          { id: '103', title: 'ChatGPT - OpenAI', url: 'https://chatgpt.com', icon: 'AI' },
+          { id: '104', title: 'Claude — Anthropic', url: 'https://claude.ai', icon: 'Cl' },
+          { id: '105', title: '哔哩哔哩 (゜-゜)つロ 干杯~ - bilibili', url: 'https://www.bilibili.com', icon: 'Bili' },
+          { id: '106', title: 'V2EX - way to explore', url: 'https://www.v2ex.com', icon: 'V2' },
+          { id: '107', title: '少数派 - 高效工作，品质生活', url: 'https://sspai.com', icon: 'π' },
+          { id: '108', title: '飞书 Feishu - 先进企业协作与管理平台', url: 'https://www.feishu.cn', icon: '飞' },
+          { id: '109', title: 'Notion – The all-in-one workspace', url: 'https://www.notion.so', icon: 'N' },
+          { id: '110', title: 'Figma: The Collaborative Interface Design Tool', url: 'https://www.figma.com', icon: 'Fg' },
+          { id: '111', title: 'Vercel: Build and deploy the best web experiences', url: 'https://vercel.com', icon: '▲' },
+          { id: '112', title: 'Linear – Plan and build products', url: 'https://linear.app', icon: 'Ln' },
+          { id: '113', title: '掘金 - 代码不止，掘金不停', url: 'https://juejin.cn', icon: '掘' },
+          { id: '114', title: '知乎 - 有问题，就会有答案', url: 'https://www.zhihu.com', icon: '知' },
+          { id: '115', title: 'YouTube', url: 'https://www.youtube.com', icon: 'YT' },
+          { id: '116', title: 'X (formerly Twitter)', url: 'https://x.com', icon: '𝕏' },
+          { id: '117', title: 'Linux Do - 新的理想型社区', url: 'https://linux.do', icon: 'LD' },
+          { id: '118', title: 'Microsoft Edge Add-ons 伙伴中心 - Microsoft', url: 'https://partner.microsoft.com/dashboard/microsoftedge', icon: 'Edg' }
+        ]
+      },
+      {
+        id: 'f-ai',
+        title: 'AI 与大模型',
+        parentId: '1',
+        depth: 1,
+        items: [
+          { id: '201', title: 'Google AI Studio — Build with Gemini', url: 'https://aistudio.google.com', icon: 'AI' },
+          { id: '202', title: 'Claude Console - Anthropic API', url: 'https://console.anthropic.com', icon: 'An' },
+          { id: '203', title: 'DeepSeek - 深度求索', url: 'https://chat.deepseek.com', icon: 'DS' },
+          { id: '204', title: 'Hugging Face – The AI community building the future', url: 'https://huggingface.co', icon: 'HF' },
+          { id: '205', title: 'Perplexity AI — Where knowledge begins', url: 'https://www.perplexity.ai', icon: 'Px' },
+          { id: '206', title: 'Cursor - The AI Code Editor', url: 'https://www.cursor.com', icon: 'Cu' },
+          { id: '207', title: 'Ollama — Run LLMs locally', url: 'https://ollama.com', icon: 'Ol' },
+          { id: '208', title: 'OpenRouter — Unified LLM Interface', url: 'https://openrouter.ai', icon: 'OR' }
+        ]
+      },
+      {
+        id: 'f-dev',
+        title: '前端与开源架构',
+        parentId: '1',
+        depth: 1,
+        items: [
+          { id: '301', title: 'MDN Web Docs — Mozilla', url: 'https://developer.mozilla.org', icon: 'MDN' },
+          { id: '302', title: 'Chrome Extensions Manifest V3 — Chrome for Developers', url: 'https://developer.chrome.com/docs/extensions', icon: 'Cr' },
+          { id: '303', title: 'Vite | Next Generation Frontend Tooling', url: 'https://vitejs.dev', icon: 'Vt' },
+          { id: '304', title: 'Lightning CSS — Extremely fast CSSbundler & minifier', url: 'https://lightningcss.dev', icon: '⚡' },
+          { id: '305', title: 'esbuild - An extremely fast bundler for the web', url: 'https://esbuild.github.io', icon: 'es' },
+          { id: '306', title: 'Tailwind CSS - Rapidly build modern websites', url: 'https://tailwindcss.com', icon: 'TW' },
+          { id: '307', title: 'npm | Home', url: 'https://www.npmjs.com', icon: 'npm' },
+          { id: '308', title: 'Can I use... Support tables for HTML5, CSS3', url: 'https://caniuse.com', icon: 'CIU' }
+        ]
+      },
+      {
+        id: 'f-arjs',
+        title: 'AR.js 与 WebXR 3D',
+        parentId: '1',
+        depth: 1,
+        items: [
+          { id: '401', title: 'AR-js-org/AR.js: Efficient Augmented Reality for the Web - GitHub', url: 'https://github.com/AR-js-org/AR.js', icon: 'AR' },
+          { id: '402', title: 'AR.js Documentation — Augmented Reality on the Web', url: 'https://ar-js-org.github.io/AR.js-Docs/', icon: 'Doc' },
+          { id: '403', title: 'Three.js – JavaScript 3D Library', url: 'https://threejs.org', icon: '3D' },
+          { id: '404', title: 'A-Frame – Make WebVR & WebXR', url: 'https://aframe.io', icon: 'AF' },
+          { id: '405', title: 'MindAR — Web Augmented Reality Image Tracking', url: 'https://hiukim.github.io/mind-ar-js-doc/', icon: 'MA' },
+          { id: '406', title: 'WebXR Device API — Immersive Web', url: 'https://immersiveweb.dev', icon: 'XR' }
+        ]
+      },
+      {
+        id: 'f-design',
+        title: 'Apple & UI 设计规范',
+        parentId: '1',
+        depth: 1,
+        items: [
+          { id: '501', title: 'Human Interface Guidelines — Apple Developer', url: 'https://developer.apple.com/design/human-interface-guidelines', icon: '' },
+          { id: '502', title: 'Apple Design Resources — macOS & iOS', url: 'https://developer.apple.com/design/resources/', icon: 'UI' },
+          { id: '503', title: 'Mobbin — The world’s largest mobile & web design library', url: 'https://mobbin.com', icon: 'Mb' },
+          { id: '504', title: 'Dribbble — Discover the World’s Top Designers', url: 'https://dribbble.com', icon: 'Dr' },
+          { id: '505', title: 'Raycast — Supercharged productivity', url: 'https://www.raycast.com', icon: 'RC' }
+        ]
+      },
+      {
+        id: 'f-media',
+        title: '社区与极客资讯',
+        parentId: '1',
+        depth: 1,
+        items: [
+          { id: '601', title: 'Hacker News — Y Combinator', url: 'https://news.ycombinator.com', icon: 'HN' },
+          { id: '602', title: 'Product Hunt – The best new products in tech', url: 'https://www.producthunt.com', icon: 'PH' },
+          { id: '603', title: 'Reddit — Dive into anything', url: 'https://www.reddit.com', icon: 'Rd' },
+          { id: '604', title: 'Readhub — 每日科技资讯', url: 'https://readhub.cn', icon: 'Rh' }
+        ]
+      },
+      {
+        id: '2',
+        title: '其他收藏夹',
+        parentId: '0',
+        depth: 0,
+        items: [
+          { id: '701', title: 'Cloudflare Dashboard | Manage your network', url: 'https://dash.cloudflare.com', icon: 'CF' },
+          { id: '702', title: 'Supabase | The Open Source Firebase Alternative', url: 'https://supabase.com', icon: 'SB' },
+          { id: '703', title: 'Excalidraw — Collaborative whiteboarding', url: 'https://excalidraw.com', icon: 'Ex' }
+        ]
+      }
+    ];
+
+    let activeFolderId = '1';
+    let currentEngine = 'bookmarks';
+    let searchQuery = '';
+    let draggedItemId = null;
+    let draggedItemIds = [];
+    let selectedItemIds = new Set();
+    let lastSelectedIndex = -1;
+    let editingFolderId = null;
+
+    const gridEl = document.getElementById('bookmarksGrid');
+    const pillsEl = document.getElementById('folderPills');
+    const selectEl = document.getElementById('folderSelect');
+    const searchInput = document.getElementById('bookmarkSearch');
+    const searchReset = document.getElementById('searchReset');
+    const searchKbd = document.getElementById('searchKbd');
+    const backFolderBtn = document.getElementById('backFolderBtn');
+    const openTabsCountEl = document.getElementById('openTabsCount');
+    const openTabsPopover = document.getElementById('openTabsPopover');
+    const openTabsListEl = document.getElementById('openTabsList');
+    const importModal = document.getElementById('importModal');
+    const fileInput = document.getElementById('realBookmarksFileInput');
+    const toastEl = document.getElementById('toastEl');
+    const folderDock = document.getElementById('folderDock');
+    const folderDockHandle = document.getElementById('folderDockHandle');
+    const selectionToolbar = document.getElementById('selectionToolbar');
+    const selectionCount = document.getElementById('selectionCount');
+    const newFolderBtn = document.getElementById('newFolderBtn');
+    let toastTimer = null;
+
+    function applyFolderDock(position, persist = true) {
+      const next = ['left', 'right', 'bottom'].includes(position) ? position : 'left';
+      folderDock.dataset.dock = next;
+      document.body.dataset.folderDock = next;
+      folderDock.style.transform = '';
+      if (persist) localStorage.setItem('visual-bookmarks-folder-dock', next);
+    }
+
+    applyFolderDock(localStorage.getItem('visual-bookmarks-folder-dock') || 'left', false);
+
+    folderDockHandle.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      folderDockHandle.setPointerCapture(event.pointerId);
+      const originX = event.clientX;
+      const originY = event.clientY;
+      folderDock.classList.add('is-moving');
+
+      const move = (moveEvent) => {
+        const dx = moveEvent.clientX - originX;
+        const dy = moveEvent.clientY - originY;
+        folderDock.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+      };
+
+      const end = (endEvent) => {
+        folderDockHandle.releasePointerCapture(event.pointerId);
+        folderDockHandle.removeEventListener('pointermove', move);
+        folderDockHandle.removeEventListener('pointerup', end);
+        folderDockHandle.removeEventListener('pointercancel', end);
+        folderDock.classList.remove('is-moving');
+
+        const distances = {
+          left: endEvent.clientX,
+          right: window.innerWidth - endEvent.clientX,
+          bottom: window.innerHeight - endEvent.clientY
+        };
+        const position = Object.entries(distances).sort((a, b) => a[1] - b[1])[0][0];
+        applyFolderDock(position);
+        showToast(`文件夹栏已停靠到${position === 'left' ? '左侧' : position === 'right' ? '右侧' : '底部'}`);
+      };
+
+      folderDockHandle.addEventListener('pointermove', move);
+      folderDockHandle.addEventListener('pointerup', end);
+      folderDockHandle.addEventListener('pointercancel', end);
+    });
+
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.remove('has-action');
+      toastEl.classList.add('is-visible');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toastEl.classList.remove('is-visible');
+      }, 2500);
+    }
+
+    function showUndoToast(msg, onUndo) {
+      clearTimeout(toastTimer);
+      toastEl.replaceChildren();
+      const label = document.createElement('span');
+      label.textContent = msg;
+      const undoButton = document.createElement('button');
+      undoButton.type = 'button';
+      undoButton.className = 'toast__undo';
+      undoButton.textContent = '撤销';
+      undoButton.addEventListener('click', () => {
+        onUndo();
+        toastEl.classList.remove('is-visible', 'has-action');
+      }, { once: true });
+      toastEl.append(label, undoButton);
+      toastEl.classList.add('is-visible', 'has-action');
+      toastTimer = setTimeout(() => {
+        toastEl.classList.remove('is-visible', 'has-action');
+      }, 6000);
+    }
+
+    function getFolderChildrenPreview(folderId) {
+      const targetFolder = FOLDERS_DATA.find(f => f.id === folderId);
+      if (!targetFolder) return [];
+      return targetFolder.items.filter(i => !i.isFolder && i.url).slice(0, 10);
+    }
+
+    function renderOpenTabsWidget() {
+      openTabsCountEl.textContent = `${OPEN_TABS.length} 个已开标签`;
+      if (!OPEN_TABS.length) {
+        openTabsListEl.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--theme-subtext-color); font-size: 13px;">当前窗口已无多余打开标签</div>`;
+        return;
+      }
+
+      openTabsListEl.innerHTML = OPEN_TABS.map(tab => `
+        <div class="tabs-item" data-tab-id="${tab.id}">
+          <div class="tabs-item__badge">${tab.icon}</div>
+          <div class="tabs-item__info" data-switch-id="${tab.id}">
+            <div class="tabs-item__title">${tab.title}</div>
+            <div class="tabs-item__url">${tab.url}</div>
+          </div>
+          <button type="button" class="tabs-item__close" data-close-id="${tab.id}" title="关闭此标签">×</button>
+        </div>
+      `).join('');
+    }
+
+    function renderFolderNavigation() {
+      pillsEl.innerHTML = '';
+      selectEl.innerHTML = '';
+
+      FOLDERS_DATA.forEach(folder => {
+        const isActive = folder.id === activeFolderId;
+        const isEditing = folder.id === editingFolderId;
+        const previewItems = getFolderChildrenPreview(folder.id);
+        const previewHtml = Array.from({ length: 10 }, (_, index) => {
+          const child = previewItems[index];
+          if (!child) return '<span class="folder-card__thumb folder-card__thumb--empty"></span>';
+          const fav = getFaviconImgUrl(child.url, 32);
+          return `<span class="folder-card__thumb" style="background-image:${getAmbientGradient(child.url)}">${fav ? `<img src="${fav}" alt="" onerror="this.style.display='none'" />` : escapeHtml(child.icon || child.title.slice(0, 1))}</span>`;
+        }).join('');
+
+        const card = document.createElement('div');
+        card.className = `folder-card${isActive ? ' is-active' : ''}`;
+        card.dataset.folderId = folder.id;
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        card.setAttribute('aria-label', `${folder.title}，${folder.items.length} 项`);
+        card.title = '单击打开，双击重命名';
+        card.innerHTML = `
+          <span class="folder-card__preview">${previewHtml}</span>
+          <span class="folder-card__copy">
+            ${isEditing
+              ? `<input class="folder-card__rename" value="${escapeHtml(folder.title)}" aria-label="重命名文件夹" />`
+              : `<span class="folder-card__title" title="${escapeHtml(folder.title)}">${escapeHtml(folder.title)}</span>`}
+            <span class="folder-card__count">${folder.items.length} 项</span>
+          </span>
+          ${folder.id === '1' || folder.id === '2' ? '' : `
+            <button class="folder-card__delete" type="button" aria-label="删除 ${escapeHtml(folder.title)}" title="删除文件夹">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 21a2 2 0 0 1-2-2V6H4V4h5V3h6v1h5v2h-1v13a2 2 0 0 1-2 2H7Zm10-15H7v13h10V6Zm-8 11h2V8H9v9Zm4 0h2V8h-2v9Z"/></svg>
+            </button>
+          `}
+        `;
+
+        const openFolder = () => {
+          if (editingFolderId === folder.id) return;
+          switchFolder(folder.id);
+        };
+        let clickTimer = null;
+        card.addEventListener('click', (e) => {
+          const deleteButton = e.target.closest('.folder-card__delete');
+          if (deleteButton) {
+            clearTimeout(clickTimer);
+            e.stopPropagation();
+            deleteFolder(folder.id);
+            return;
+          }
+          if (e.target.closest('.folder-card__rename')) return;
+          clearTimeout(clickTimer);
+          clickTimer = setTimeout(openFolder, 220);
+        });
+        card.addEventListener('dblclick', (e) => {
+          if (e.target.closest('.folder-card__delete, .folder-card__rename')) return;
+          e.preventDefault();
+          clearTimeout(clickTimer);
+          startFolderRename(folder.id);
+        });
+        card.addEventListener('keydown', (e) => {
+          if ((e.key === 'Enter' || e.key === ' ') && !e.target.closest('input, button')) {
+            e.preventDefault();
+            openFolder();
+          }
+        });
+
+        const renameInput = card.querySelector('.folder-card__rename');
+        if (renameInput) {
+          const commit = () => commitFolderRename(folder.id, renameInput.value);
+          renameInput.addEventListener('click', e => e.stopPropagation());
+          renameInput.addEventListener('blur', commit);
+          renameInput.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') renameInput.blur();
+            if (e.key === 'Escape') {
+              editingFolderId = null;
+              renderFolderNavigation();
+            }
+          });
+          requestAnimationFrame(() => {
+            renameInput.focus();
+            renameInput.select();
+          });
+        }
+
+        card.addEventListener('dragover', (e) => {
+          if (!draggedItemId || folder.id === activeFolderId) return;
+          e.preventDefault();
+          card.classList.add('is-drop-target');
+        });
+        card.addEventListener('dragleave', () => {
+          card.classList.remove('is-drop-target');
+        });
+        card.addEventListener('drop', (e) => {
+          e.preventDefault();
+          card.classList.remove('is-drop-target');
+          if (!draggedItemId || folder.id === activeFolderId) return;
+          moveItemsToFolder(draggedItemIds.length ? draggedItemIds : [draggedItemId], folder.id);
+        });
+
+        pillsEl.appendChild(card);
+
+        const opt = document.createElement('option');
+        opt.value = folder.id;
+        opt.selected = isActive;
+        const indent = '— '.repeat(folder.depth || 0);
+        opt.textContent = `${indent}${folder.title} (${folder.items.length})`;
+        selectEl.appendChild(opt);
+      });
+
+      const currentFolder = FOLDERS_DATA.find(f => f.id === activeFolderId);
+      backFolderBtn.hidden = !(currentFolder && currentFolder.parentId && currentFolder.parentId !== '0');
+    }
+
+    function getItemLocation(itemId) {
+      for (const folder of FOLDERS_DATA) {
+        const index = folder.items.findIndex(item => item.id === itemId);
+        if (index !== -1) return { folder, index, item: folder.items[index] };
+      }
+      return null;
+    }
+
+    function deleteBookmark(itemId) {
+      const location = getItemLocation(itemId);
+      if (!location || location.item.isFolder) return;
+
+      const dataSnapshot = JSON.parse(JSON.stringify(FOLDERS_DATA));
+      const selectedSnapshot = [...selectedItemIds];
+      const previousActiveFolderId = activeFolderId;
+      const [deletedItem] = location.folder.items.splice(location.index, 1);
+      const deletedTitle = parseSmartTitle(deletedItem.title, deletedItem.url).primary;
+
+      selectedItemIds.delete(itemId);
+      renderFolderNavigation();
+      renderGrid();
+      showUndoToast(`已删除「${deletedTitle}」`, () => {
+        FOLDERS_DATA = dataSnapshot;
+        selectedItemIds = new Set(selectedSnapshot);
+        activeFolderId = previousActiveFolderId;
+        renderFolderNavigation();
+        renderGrid();
+        showToast(`已恢复「${deletedTitle}」`);
+      });
+    }
+
+    function moveItemsToFolder(itemIds, destFolderId) {
+      const destFolder = FOLDERS_DATA.find(f => f.id === destFolderId);
+      if (!destFolder) return;
+
+      const uniqueIds = [...new Set(itemIds)].filter(id => id !== destFolderId);
+      const movedItems = [];
+      uniqueIds.forEach(itemId => {
+        const location = getItemLocation(itemId);
+        if (!location || location.folder.id === destFolderId || location.item.isFolder) return;
+        const [moved] = location.folder.items.splice(location.index, 1);
+        destFolder.items.push(moved);
+        movedItems.push(moved);
+      });
+      if (!movedItems.length) return;
+
+      movedItems.forEach(item => selectedItemIds.delete(item.id));
+      draggedItemIds = [];
+      draggedItemId = null;
+
+      renderFolderNavigation();
+      renderGrid();
+      showToast(movedItems.length === 1
+        ? `已将「${parseSmartTitle(movedItems[0].title, movedItems[0].url).primary}」移入「${destFolder.title}」`
+        : `已将 ${movedItems.length} 个书签移入「${destFolder.title}」`);
+    }
+
+    function moveItemToFolder(itemId, destFolderId) {
+      moveItemsToFolder([itemId], destFolderId);
+    }
+
+    function startFolderRename(folderId) {
+      editingFolderId = folderId;
+      renderFolderNavigation();
+    }
+
+    function commitFolderRename(folderId, nextTitle) {
+      if (editingFolderId !== folderId) return;
+      const folder = FOLDERS_DATA.find(item => item.id === folderId);
+      const cleanTitle = nextTitle.trim() || '未命名文件夹';
+      if (folder) {
+        folder.title = cleanTitle;
+        FOLDERS_DATA.forEach(parent => {
+          const reference = parent.items.find(item => item.isFolder && item.id === folderId);
+          if (reference) reference.title = cleanTitle;
+        });
+      }
+      editingFolderId = null;
+      renderFolderNavigation();
+      showToast(`文件夹已重命名为「${cleanTitle}」`);
+    }
+
+    function createFolder() {
+      const parentFolder = FOLDERS_DATA.find(folder => folder.id === '1') || FOLDERS_DATA[0];
+      const id = `folder-${Date.now()}`;
+      const title = '未命名文件夹';
+      FOLDERS_DATA.push({
+        id,
+        title,
+        parentId: parentFolder.id,
+        depth: 1,
+        items: []
+      });
+      parentFolder.items.unshift({ id, title, isFolder: true });
+      editingFolderId = id;
+      renderFolderNavigation();
+      showToast('已新建文件夹');
+    }
+
+    function deleteFolder(folderId) {
+      if (folderId === '1' || folderId === '2') {
+        showToast('系统根文件夹不能删除');
+        return;
+      }
+      const folder = FOLDERS_DATA.find(item => item.id === folderId);
+      if (!folder) return;
+
+      const folderSnapshot = JSON.parse(JSON.stringify(FOLDERS_DATA));
+      const previousActiveFolderId = activeFolderId;
+
+      const rootFolder = FOLDERS_DATA.find(item => item.id === '1') || FOLDERS_DATA[0];
+      rootFolder.items = rootFolder.items.filter(item => item.id !== folderId);
+      rootFolder.items.push(...folder.items.filter(item => !item.isFolder));
+      FOLDERS_DATA.forEach(parent => {
+        if (parent.id !== rootFolder.id) parent.items = parent.items.filter(item => item.id !== folderId);
+      });
+      FOLDERS_DATA = FOLDERS_DATA.filter(item => item.id !== folderId);
+      if (activeFolderId === folderId) activeFolderId = '1';
+      renderFolderNavigation();
+      renderGrid();
+      showUndoToast(`已删除「${folder.title}」`, () => {
+        FOLDERS_DATA = folderSnapshot;
+        activeFolderId = previousActiveFolderId;
+        renderFolderNavigation();
+        renderGrid();
+        showToast(`已恢复「${folder.title}」`);
+      });
+    }
+
+    function refreshShortcutBadges() {
+      // Shortcut badges intentionally removed for the minimal interface.
+    }
+
+    function syncSelectionUi() {
+      gridEl.classList.toggle('has-selection', selectedItemIds.size > 0);
+      selectionToolbar.hidden = selectedItemIds.size === 0;
+      selectionCount.textContent = `已选 ${selectedItemIds.size} 项`;
+      gridEl.querySelectorAll('.bookmark').forEach(card => {
+        const isSelected = selectedItemIds.has(card.dataset.id);
+        card.classList.toggle('is-selected', isSelected);
+      });
+    }
+
+    function clearSelection() {
+      selectedItemIds.clear();
+      lastSelectedIndex = -1;
+      syncSelectionUi();
+    }
+
+    function selectItem(itemId, itemIndex, event = {}) {
+      const visibleItems = getFilteredItems();
+      if (event.shiftKey && lastSelectedIndex >= 0) {
+        const start = Math.min(lastSelectedIndex, itemIndex);
+        const end = Math.max(lastSelectedIndex, itemIndex);
+        for (let index = start; index <= end; index += 1) {
+          const item = visibleItems[index];
+          if (item && !item.isFolder) selectedItemIds.add(item.id);
+        }
+      } else if (selectedItemIds.has(itemId)) {
+        selectedItemIds.delete(itemId);
+      } else {
+        selectedItemIds.add(itemId);
+      }
+      lastSelectedIndex = itemIndex;
+      syncSelectionUi();
+    }
+
+    function getFilteredItems() {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) {
+        const folder = FOLDERS_DATA.find(f => f.id === activeFolderId) || FOLDERS_DATA[0];
+        return folder ? folder.items.filter(item => !item.isFolder) : [];
+      }
+      const all = [];
+      const seen = new Set();
+      FOLDERS_DATA.forEach(folder => {
+        folder.items.forEach(item => {
+          if (item.isFolder) return;
+          if (seen.has(item.id)) return;
+          if (
+            item.title.toLowerCase().includes(q) ||
+            (item.url && item.url.toLowerCase().includes(q))
+          ) {
+            seen.add(item.id);
+            all.push(item);
+          }
+        });
+      });
+      return all;
+    }
+
+    function renderGrid() {
+      gridEl.innerHTML = '';
+      const items = getFilteredItems();
+
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'grid-column: 1 / -1; text-align: center; padding: 48px 20px; color: var(--theme-subtext-color); font-size: 15px;';
+        empty.textContent = `未找到匹配 "${searchQuery}" 的书签`;
+        gridEl.appendChild(empty);
+        return;
+      }
+
+      items.forEach((item, idx) => {
+        const card = document.createElement('a');
+        card.className = `bookmark${selectedItemIds.has(item.id) ? ' is-selected' : ''}`;
+        card.dataset.id = item.id;
+        card.draggable = !searchQuery.trim();
+        card.href = item.isFolder ? `#${item.id}` : item.url;
+        if (!item.isFolder) card.target = '_blank';
+
+        const { primary, domain } = parseSmartTitle(item.title, item.url, item.isFolder);
+        const favUrl = !item.isFolder ? getFaviconImgUrl(item.url, 64) : '';
+        const fallbackText = (item.icon || primary.slice(0, 2)).toUpperCase();
+
+        let thumbHtml = '';
+        if (item.isFolder) {
+          const previewChildren = getFolderChildrenPreview(item.id);
+          const childrenHtml = previewChildren.map(ch => {
+            const bg = getAmbientGradient(ch.url);
+            const chFav = getFaviconImgUrl(ch.url, 32);
+            return `
+              <div class="bookmark__img--children" style="background-image: ${bg}" title="${ch.title}">
+                ${chFav ? `<img src="${chFav}" alt="" loading="lazy" onerror="this.style.display='none'" />` : (ch.icon || ch.title.slice(0, 1))}
+              </div>
+            `;
+          }).join('');
+          thumbHtml = `<div class="bookmark__summary-folder">${childrenHtml}</div>`;
+        } else {
+          const ambient = item.thumbGradient || getAmbientGradient(item.url);
+          const screenshotUrl = getScreenshotUrl(item.url);
+          thumbHtml = `
+            <div class="bookmark__img" style="background-image: ${ambient}">
+              ${screenshotUrl ? `<img class="bookmark__screenshot" src="${screenshotUrl}" alt="" loading="lazy" onload="this.parentElement.classList.add('has-screenshot')" onerror="this.remove()" />` : ''}
+              <div class="bookmark__logo-badge">
+                ${favUrl ? `<img src="${favUrl}" alt="" loading="lazy" onerror="this.replaceWith(document.createTextNode('${fallbackText}'))" />` : fallbackText}
+              </div>
+            </div>
+          `;
+        }
+
+        card.innerHTML = `
+          <div class="bookmark__stage">
+            <button type="button" class="bookmark__delete" aria-label="删除 ${escapeHtml(primary)}" title="删除书签">×</button>
+            ${thumbHtml}
+            <div class="bookmark__in-card-domain" title="${escapeHtml(item.url || domain)}">${escapeHtml(domain || primary)}</div>
+          </div>
+          <div class="bookmark__caption">
+            <div class="bookmark__description" title="${escapeHtml(primary)}">${escapeHtml(primary)}</div>
+          </div>
+        `;
+
+        // Drag & Drop
+        card.addEventListener('dragstart', (e) => {
+          if (selectedItemIds.has(item.id)) {
+            draggedItemIds = [...selectedItemIds];
+          } else {
+            selectedItemIds = new Set([item.id]);
+            draggedItemIds = [item.id];
+            lastSelectedIndex = idx;
+            syncSelectionUi();
+          }
+          draggedItemId = item.id;
+          card.classList.add('is-dragging');
+          draggedItemIds.forEach(id => {
+            gridEl.querySelector(`.bookmark[data-id="${id}"]`)?.classList.add('is-group-dragging');
+          });
+          gridEl.classList.add('has-dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          try {
+            e.dataTransfer.setData('text/plain', draggedItemIds.join(','));
+          } catch (err) {}
+        });
+
+        card.addEventListener('dragend', () => {
+          card.classList.remove('is-dragging');
+          gridEl.querySelectorAll('.is-group-dragging').forEach(el => el.classList.remove('is-group-dragging'));
+          gridEl.classList.remove('has-dragging');
+          gridEl.querySelectorAll('.is-folder-drop-target').forEach(el => el.classList.remove('is-folder-drop-target'));
+          draggedItemId = null;
+          draggedItemIds = [];
+          refreshShortcutBadges();
+        });
+
+        card.addEventListener('dragover', (e) => {
+          if (!draggedItemId || draggedItemId === item.id) return;
+          e.preventDefault();
+          const draggedEl = gridEl.querySelector(`.bookmark[data-id="${draggedItemId}"]`);
+          if (!draggedEl) return;
+
+          const rect = card.getBoundingClientRect();
+          const relX = (e.clientX - rect.left) / rect.width;
+
+          if (item.isFolder && relX > 0.25 && relX < 0.75) {
+            card.classList.add('is-folder-drop-target');
+            return;
+          }
+          card.classList.remove('is-folder-drop-target');
+
+          if (draggedItemIds.length > 1) return;
+          const folder = FOLDERS_DATA.find(f => f.id === activeFolderId);
+          if (!folder) return;
+          const fromIdx = folder.items.findIndex(i => i.id === draggedItemId);
+          const toIdx = folder.items.findIndex(i => i.id === item.id);
+          if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+
+          const [moved] = folder.items.splice(fromIdx, 1);
+          folder.items.splice(toIdx, 0, moved);
+
+          if (fromIdx < toIdx) {
+            card.after(draggedEl);
+          } else {
+            card.before(draggedEl);
+          }
+        });
+
+        card.addEventListener('dragleave', () => {
+          card.classList.remove('is-folder-drop-target');
+        });
+
+        card.addEventListener('drop', (e) => {
+          e.preventDefault();
+          if (card.classList.contains('is-folder-drop-target') && item.isFolder && draggedItemId && draggedItemId !== item.id) {
+            card.classList.remove('is-folder-drop-target');
+            moveItemToFolder(draggedItemId, item.id);
+          }
+        });
+
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.bookmark__delete')) {
+            e.preventDefault();
+            e.stopPropagation();
+            deleteBookmark(item.id);
+            return;
+          }
+          if (e.metaKey || e.ctrlKey || e.shiftKey || selectedItemIds.size > 0) {
+            e.preventDefault();
+            selectItem(item.id, idx, e);
+            return;
+          }
+          if (item.isFolder) {
+            e.preventDefault();
+            switchFolder(item.id);
+          } else {
+            e.preventDefault();
+            showToast(`正在打开：${primary} (${domain || item.url})`);
+          }
+        });
+
+        gridEl.appendChild(card);
+      });
+
+      syncSelectionUi();
+
+    }
+
+    function switchFolder(folderId) {
+      activeFolderId = folderId;
+      selectedItemIds.clear();
+      lastSelectedIndex = -1;
+      searchQuery = '';
+      searchInput.value = '';
+      searchReset.hidden = true;
+      searchKbd.hidden = false;
+      renderFolderNavigation();
+      renderGrid();
+    }
+
+    /**
+     * Real Edge / Chrome Netscape Bookmark HTML & Chromium Bookmarks JSON Parser
+     * Parses any user-exported `bookmarks_*.html` or `Bookmarks` JSON into FOLDERS_DATA tree
+     */
+    function parseNetscapeBookmarksHtml(htmlText) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlText, 'text/html');
+      const folders = [];
+      let idSeq = 1000;
+
+      function walkDL(dlEl, currentFolder) {
+        if (!dlEl) return;
+        const children = Array.from(dlEl.children);
+        for (let i = 0; i < children.length; i++) {
+          const el = children[i];
+          const dt = el.tagName === 'DT' ? el : el.querySelector(':scope > dt');
+          const target = dt || el;
+
+          const h3 = target.querySelector(':scope > h3');
+          const a = target.querySelector(':scope > a');
+          const subDl = target.querySelector(':scope > dl') || (el.nextElementSibling?.tagName === 'DL' ? el.nextElementSibling : null);
+
+          if (h3) {
+            const folderId = `imp-f-${++idSeq}`;
+            const title = h3.textContent.trim() || '未命名文件夹';
+            const newFolder = {
+              id: folderId,
+              title,
+              parentId: currentFolder ? currentFolder.id : '0',
+              depth: currentFolder ? (currentFolder.depth || 0) + 1 : 0,
+              items: []
+            };
+            folders.push(newFolder);
+            if (currentFolder) {
+              currentFolder.items.push({
+                id: folderId,
+                title,
+                isFolder: true
+              });
+            }
+            if (subDl) walkDL(subDl, newFolder);
+          } else if (a && a.href && /^https?:\/\//i.test(a.href)) {
+            if (!currentFolder) {
+              currentFolder = {
+                id: 'imp-root',
+                title: '导入的收藏夹',
+                parentId: '0',
+                depth: 0,
+                items: []
+              };
+              folders.push(currentFolder);
+            }
+            currentFolder.items.push({
+              id: `imp-bm-${++idSeq}`,
+              title: a.textContent.trim() || a.href,
+              url: a.href
+            });
+          } else if (el.tagName === 'DL') {
+            walkDL(el, currentFolder);
+          }
+        }
+      }
+
+      const rootDl = doc.querySelector('dl');
+      if (rootDl) walkDL(rootDl, null);
+      return folders.filter(f => f.items.length > 0);
+    }
+
+    function parseChromiumBookmarksJson(jsonText) {
+      const data = JSON.parse(jsonText);
+      const roots = data.roots || {};
+      const folders = [];
+
+      function walkNode(node, parentId = '0', depth = 0) {
+        if (!node || !Array.isArray(node.children)) return;
+        const folderId = String(node.id || `json-f-${folders.length + 1}`);
+        const folderObj = {
+          id: folderId,
+          title: node.name || '收藏夹',
+          parentId,
+          depth,
+          items: []
+        };
+        folders.push(folderObj);
+
+        for (const child of node.children) {
+          if (child.type === 'url' && child.url) {
+            folderObj.items.push({
+              id: String(child.id || Math.random()),
+              title: child.name || child.url,
+              url: child.url
+            });
+          } else if (child.type === 'folder' || Array.isArray(child.children)) {
+            const subId = String(child.id || `json-f-${folders.length + 1}`);
+            folderObj.items.push({
+              id: subId,
+              title: child.name || '子文件夹',
+              isFolder: true
+            });
+            walkNode({ ...child, id: subId }, folderId, depth + 1);
+          }
+        }
+      }
+
+      if (roots.bookmark_bar) walkNode(roots.bookmark_bar, '0', 0);
+      if (roots.other) walkNode(roots.other, '0', 0);
+      if (roots.synced) walkNode(roots.synced, '0', 0);
+      return folders.filter(f => f.items.length > 0);
+    }
+
+    async function handleImportFile(file) {
+      if (!file) return;
+      try {
+        const text = await file.text();
+        let parsedFolders = [];
+        if (file.name.endsWith('.json') || text.trim().startsWith('{')) {
+          parsedFolders = parseChromiumBookmarksJson(text);
+        } else {
+          parsedFolders = parseNetscapeBookmarksHtml(text);
+        }
+
+        if (!parsedFolders.length) {
+          showToast('未在文件中解析到有效书签，请确认是否为 Edge 导出的 HTML 或 JSON 文件');
+          return;
+        }
+
+        FOLDERS_DATA = parsedFolders;
+        activeFolderId = FOLDERS_DATA[0].id;
+        importModal.hidden = true;
+        renderFolderNavigation();
+        renderGrid();
+        const totalItems = FOLDERS_DATA.reduce((sum, f) => sum + f.items.filter(i => !i.isFolder).length, 0);
+        showToast(`已成功导入 ${FOLDERS_DATA.length} 个真实书签目录、共 ${totalItems} 条书签！`);
+      } catch (err) {
+        showToast('解析书签文件失败，请检查文件格式');
+      }
+    }
+
+    // Bind Import Modal & File Drop
+    document.getElementById('topImportBtn').addEventListener('click', () => {
+      importModal.hidden = false;
+    });
+    document.getElementById('settingsImportBtn').addEventListener('click', () => {
+      importModal.hidden = false;
+    });
+    document.getElementById('closeImportModalBtn').addEventListener('click', () => {
+      importModal.hidden = true;
+    });
+
+    const dropZone = document.getElementById('dropImportZone');
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('is-dragover');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('is-dragover');
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('is-dragover');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) handleImportFile(file);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (file) handleImportFile(file);
+      fileInput.value = '';
+    });
+
+    document.getElementById('loadStressSampleBtn').addEventListener('click', () => {
+      importModal.hidden = true;
+      switchFolder('1');
+      showToast('已加载包含 7 个真实目录（含 AR.js / AI / 前端架构）的完整 Edge 书签树');
+    });
+
+    // Open Tabs Popover & Stash handlers
+    document.getElementById('openTabsBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openTabsPopover.hidden = !openTabsPopover.hidden;
+      if (!openTabsPopover.hidden) renderOpenTabsWidget();
+    });
+
+    openTabsListEl.addEventListener('click', (e) => {
+      const closeBtn = e.target.closest('[data-close-id]');
+      if (closeBtn) {
+        e.stopPropagation();
+        const id = Number(closeBtn.dataset.closeId);
+        OPEN_TABS = OPEN_TABS.filter(t => t.id !== id);
+        renderOpenTabsWidget();
+        return;
+      }
+      const switchItem = e.target.closest('[data-switch-id]');
+      if (switchItem) {
+        const id = Number(switchItem.dataset.switchId);
+        const tab = OPEN_TABS.find(t => t.id === id);
+        openTabsPopover.hidden = true;
+        if (tab) showToast(`已切换至标签页：${tab.title}`);
+      }
+    });
+
+    document.getElementById('dedupeTabsBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const seen = new Set();
+      const before = OPEN_TABS.length;
+      OPEN_TABS = OPEN_TABS.filter(t => {
+        if (seen.has(t.url)) return false;
+        seen.add(t.url);
+        return true;
+      });
+      const removed = before - OPEN_TABS.length;
+      renderOpenTabsWidget();
+      showToast(removed ? `已关闭 ${removed} 个重复标签页` : '无重复标签页');
+    });
+
+    document.getElementById('stashTabsBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!OPEN_TABS.length) return;
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const stashId = `stash-${Date.now()}`;
+      const stashTitle = `⚡ 暂存 ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      const stashedItems = OPEN_TABS.map((t, i) => ({
+        id: `${stashId}-${i}`,
+        title: t.title,
+        url: t.url,
+        icon: t.icon
+      }));
+
+      FOLDERS_DATA.push({
+        id: stashId,
+        title: stashTitle,
+        parentId: '1',
+        depth: 1,
+        items: stashedItems
+      });
+
+      const count = OPEN_TABS.length;
+      OPEN_TABS = [];
+      openTabsPopover.hidden = true;
+      renderOpenTabsWidget();
+      switchFolder(stashId);
+      showToast(`已暂存 ${count} 个标签页`);
+    });
+
+    searchInput.addEventListener('input', (e) => {
+      searchQuery = e.target.value;
+      const hasVal = searchQuery.trim().length > 0;
+      searchReset.hidden = !hasVal;
+      searchKbd.hidden = hasVal;
+      renderGrid();
+    });
+
+    searchReset.addEventListener('click', () => {
+      searchQuery = '';
+      searchInput.value = '';
+      searchReset.hidden = true;
+      searchKbd.hidden = false;
+      renderGrid();
+      searchInput.focus();
+    });
+
+    document.getElementById('searchForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) return;
+      const openMatch = OPEN_TABS.find(t => t.title.toLowerCase().includes(q) || t.url.toLowerCase().includes(q));
+      if (currentEngine === 'bookmarks' && openMatch) {
+        showToast(`已跳转至打开的标签页：${openMatch.title}`);
+        return;
+      }
+      const first = gridEl.querySelector('.bookmark:not(.bookmark-btn--create)');
+      if (first) first.click();
+    });
+
+    selectEl.addEventListener('change', (e) => switchFolder(e.target.value));
+    newFolderBtn.addEventListener('click', createFolder);
+    document.getElementById('selectAllBtn').addEventListener('click', () => {
+      getFilteredItems().forEach(item => {
+        if (!item.isFolder) selectedItemIds.add(item.id);
+      });
+      syncSelectionUi();
+    });
+    document.getElementById('clearSelectionBtn').addEventListener('click', clearSelection);
+    backFolderBtn.addEventListener('click', () => {
+      const cur = FOLDERS_DATA.find(f => f.id === activeFolderId);
+      switchFolder(cur && cur.parentId && cur.parentId !== '0' ? cur.parentId : '1');
+    });
+
+    pillsEl.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      if (folderDock.dataset.dock === 'bottom') pillsEl.scrollLeft += e.deltaY;
+      else pillsEl.scrollTop += e.deltaY;
+    }, { passive: false });
+
+    const engineBtn = document.getElementById('engineBtn');
+    const engineMenu = document.getElementById('engineMenu');
+    const engineIcon = document.getElementById('engineIcon');
+    engineBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      engineMenu.hidden = !engineMenu.hidden;
+    });
+
+    engineMenu.addEventListener('click', (e) => {
+      const item = e.target.closest('.engine-item');
+      if (!item) return;
+      currentEngine = item.dataset.engine;
+      engineMenu.querySelectorAll('.engine-item').forEach(el => el.classList.toggle('is-active', el === item));
+      engineIcon.textContent = currentEngine === 'bookmarks' ? '★' : currentEngine === 'google' ? 'G' : 'B';
+      engineMenu.hidden = true;
+      searchInput.focus();
+    });
+
+    document.addEventListener('click', (e) => {
+      engineMenu.hidden = true;
+      if (!e.target.closest('#openTabsWidget')) {
+        openTabsPopover.hidden = true;
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      const tag = document.activeElement?.tagName;
+      const inInput = tag === 'INPUT' || tag === 'SELECT';
+
+      if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        searchInput.focus();
+        searchInput.select();
+        return;
+      }
+
+      if (e.code === 'Slash' && !inInput) {
+        e.preventDefault();
+        searchInput.focus();
+        return;
+      }
+
+      if (e.code === 'Escape') {
+        if (selectedItemIds.size) {
+          clearSelection();
+          return;
+        }
+        if (!importModal.hidden) {
+          importModal.hidden = true;
+          return;
+        }
+        if (!openTabsPopover.hidden) {
+          openTabsPopover.hidden = true;
+          return;
+        }
+        if (!document.getElementById('addModal').hidden) {
+          document.getElementById('addModal').hidden = true;
+          return;
+        }
+        if (searchInput.value) {
+          searchReset.click();
+          return;
+        }
+        document.getElementById('inspectorDrawer').classList.remove('is-open');
+      }
+
+    });
+
+    const inspectorDrawer = document.getElementById('inspectorDrawer');
+    document.getElementById('openInspectorBtn').addEventListener('click', () => {
+      inspectorDrawer.classList.toggle('is-open');
+    });
+    document.getElementById('closeInspectorBtn').addEventListener('click', () => {
+      inspectorDrawer.classList.remove('is-open');
+    });
+
+    document.getElementById('themeSegmented').addEventListener('click', (e) => {
+      const btn = e.target.closest('.segmented-btn');
+      if (!btn) return;
+      document.querySelectorAll('#themeSegmented .segmented-btn').forEach(b => b.classList.toggle('is-active', b === btn));
+      const mode = btn.dataset.theme;
+      if (mode === 'os') {
+        document.documentElement.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches);
+      } else {
+        document.documentElement.classList.toggle('dark', mode === 'dark');
+      }
+    });
+
+    document.getElementById('wallpaperSegmented').addEventListener('click', (e) => {
+      const btn = e.target.closest('.segmented-btn');
+      if (!btn) return;
+      document.querySelectorAll('#wallpaperSegmented .segmented-btn').forEach(b => b.classList.toggle('is-active', b === btn));
+      document.getElementById('bgLayer').dataset.wallpaper = btn.dataset.wp;
+    });
+
+    document.getElementById('colRange').addEventListener('input', (e) => {
+      document.documentElement.style.setProperty('--grid-columns', e.target.value);
+      document.getElementById('colCountVal').textContent = `${e.target.value} 列`;
+    });
+
+    document.getElementById('widthRange').addEventListener('input', (e) => {
+      document.documentElement.style.setProperty('--container-width', `${e.target.value}%`);
+      document.getElementById('widthVal').textContent = `${e.target.value}%`;
+    });
+
+    document.getElementById('radiusRange').addEventListener('input', (e) => {
+      document.documentElement.style.setProperty('--bookmark-radius', `${e.target.value}px`);
+      document.getElementById('radiusVal').textContent = `${e.target.value}px`;
+    });
+
+    document.getElementById('ratioSegmented').addEventListener('click', (e) => {
+      const btn = e.target.closest('.segmented-btn');
+      if (!btn) return;
+      document.querySelectorAll('#ratioSegmented .segmented-btn').forEach(b => b.classList.toggle('is-active', b === btn));
+      document.documentElement.style.setProperty('--bookmark-aspect-ratio', btn.dataset.ratio);
+    });
+
+    document.getElementById('cancelModalBtn').addEventListener('click', () => {
+      document.getElementById('addModal').hidden = true;
+    });
+
+    document.getElementById('addBookmarkForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const title = document.getElementById('newBmTitle').value.trim();
+      const url = document.getElementById('newBmUrl').value.trim();
+      if (!title || !url) return;
+      const folder = FOLDERS_DATA.find(f => f.id === activeFolderId) || FOLDERS_DATA[0];
+      folder.items.push({
+        id: String(Date.now()),
+        title,
+        url,
+        icon: title.slice(0, 2).toUpperCase()
+      });
+      document.getElementById('addBookmarkForm').reset();
+      document.getElementById('addModal').hidden = true;
+      renderFolderNavigation();
+      renderGrid();
+    });
+
+    renderOpenTabsWidget();
+    renderFolderNavigation();
+    renderGrid();
+  </script>
+</body>
+</html>

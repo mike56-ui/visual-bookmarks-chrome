@@ -24,13 +24,17 @@ import {
 import { containsPermissions } from './api/permissions';
 
 function browserActionHandler() {
+  const bookmarkPage = browser.runtime.getURL('newtab.html');
+  const edgeBookmarkPage = bookmarkPage.replace(/^chrome-extension:/, 'extension:');
   browser.tabs.query({ currentWindow: true }, function(tabs) {
     for (let tab of tabs) {
-      if (NEWTAB_URLS.some(url => tab.url.startsWith(url))) {
+      // A browser new-tab URL may still show Edge's default page or another extension.
+      const url = (tab.url || '').split(/[?#]/)[0];
+      if (url === bookmarkPage || url === edgeBookmarkPage) {
         return browser.tabs.update(tab.id, { active: true });
       }
     }
-    return browser.tabs.create({ url: browser.runtime.getURL('newtab.html') });
+    return browser.tabs.create({ url: bookmarkPage });
   });
 }
 

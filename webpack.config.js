@@ -188,7 +188,7 @@ module.exports = (env, arg) => {
       }),
       new webpack.EnvironmentPlugin({ BROWSER: 'chrome' }),
       BROWSER !== 'firefox' && new webpack.BannerPlugin({
-        banner: 'if (typeof browser === "undefined") { browser = chrome; }',
+        banner: 'if (typeof globalThis.browser === "undefined") { globalThis.browser = globalThis.chrome; }',
         raw: true,
         entryOnly: false,
         test: /\.js$/
