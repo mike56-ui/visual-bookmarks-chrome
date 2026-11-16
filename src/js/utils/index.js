@@ -181,9 +181,9 @@ export function $resizeScreen(image) {
 
 export async function $resizeThumbnail(
   fileBlob,
-  resizeHeight = 500,
+  resizeHeight = 900,
   resizeQuality = 'high',
-  quality = 0.75
+  quality = 0.92
 ) {
   let imageBitmap = await createImageBitmap(fileBlob);
 
@@ -290,11 +290,47 @@ export async function $filePicker(pickerOpts = {
 }
 
 export function faviconURL(url, size = 16) {
-  // const favUrl = new URL(browser.runtime.getURL('/_favicon/'));
-  // favUrl.searchParams.set('pageUrl', url);
-  // favUrl.searchParams.set('size', size);
-  // return favUrl.toString();
-  return `https://www.google.com/s2/favicons?sz=${size}&domain_url=${url}`;
+  // Only send the origin, never bookmark paths, query strings or credentials.
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) return browser.runtime.getURL('img/protocol.svg');
+    return `https://www.google.com/s2/favicons?sz=${size}&domain_url=${encodeURIComponent(parsed.origin)}`;
+  } catch {
+    return browser.runtime.getURL('img/protocol.svg');
+  }
+}
+
+/** A consistent icon frame, with a readable fallback and no bitmap upscaling. */
+export function createSiteIcon(url, { size = 36, source } = {}) {
+  let label = '?';
+  try {
+    label = new URL(url).hostname.replace(/^www\./, '').charAt(0).toUpperCase() || '?';
+  } catch {}
+  const frame = $createElement('span', { class: 'site-icon', 'aria-hidden': 'true' });
+  const fallback = $createElement('span', { class: 'site-icon__fallback' }, label);
+  const image = $createElement('img', {
+    class: 'site-icon__image', alt: '', loading: 'lazy', decoding: 'async', draggable: 'false',
+    referrerpolicy: 'no-referrer'
+  });
+  image.addEventListener('load', () => {
+    const scale = Math.min(1, size / image.naturalWidth, size / image.naturalHeight);
+    const width = Math.round(image.naturalWidth * scale);
+    const height = Math.round(image.naturalHeight * scale);
+    // Prefer a sharp monogram to stretching a tiny favicon over a large card.
+    if (Math.min(width, height) < Math.min(size, 24)) return;
+    image.style.width = `${width}px`;
+    image.style.height = `${height}px`;
+    image.classList.add('is-loaded');
+    fallback.hidden = true;
+    image.hidden = false;
+  });
+  image.addEventListener('error', () => {
+    fallback.hidden = false;
+    image.hidden = true;
+  });
+  image.src = source || faviconURL(url, size > 24 ? 128 : 64);
+  frame.append(fallback, image);
+  return frame;
 }
 
 export function getVideoPoster(file, height = 150) {

@@ -8,7 +8,7 @@ import {
   removeTree,
   update
 } from '../api/bookmark';
-import { faviconURL } from '../utils';
+import { createSiteIcon } from '../utils';
 
 const DOCK_POSITIONS = ['left', 'right', 'bottom'];
 const DOCK_POSITION_KEY = 'visual-bookmarks-folder-dock';
@@ -80,8 +80,7 @@ class FolderDock {
       const cells = Array.from({ length: PREVIEW_SIZE }, (_, index) => {
         const bookmark = previewItems[index];
         if (!bookmark) return '<span class="folder-card__cell is-empty"></span>';
-        return `<span class="folder-card__cell" title="${escapeHTML(bookmark.title)}">
-          <img src="${escapeHTML(faviconURL(bookmark.url, 32))}" alt="" loading="lazy">
+        return `<span class="folder-card__cell" title="${escapeHTML(bookmark.title)}" data-icon-url="${escapeHTML(bookmark.url)}">
         </span>`;
       }).join('');
       const isProtected = folder.parentId === '0';
@@ -108,10 +107,8 @@ class FolderDock {
     }).join('');
 
     this.#list.scrollTop = scrollTop;
-    this.#list.querySelectorAll('img').forEach(image => {
-      image.addEventListener('error', () => {
-        image.hidden = true;
-      }, { once: true });
+    this.#list.querySelectorAll('[data-icon-url]').forEach(cell => {
+      cell.append(createSiteIcon(cell.dataset.iconUrl, { size: 18 }));
     });
 
     const input = this.#list.querySelector('.folder-card__rename');

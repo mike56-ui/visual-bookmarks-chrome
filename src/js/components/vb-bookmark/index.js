@@ -1,5 +1,5 @@
 // import styles from '../../../css/components/_bookmark.css';
-import { $createElement, $getDomain, faviconURL } from '../../utils';
+import { $createElement, $getDomain, faviconURL, createSiteIcon } from '../../utils';
 import { SVG_LOADER } from '../../constants';
 
 class VbBookmark extends HTMLAnchorElement {
@@ -64,11 +64,7 @@ class VbBookmark extends HTMLAnchorElement {
   #updateLogo() {
     const imageEl = this.querySelector('.bookmark__img--base');
     if (!imageEl) return;
-    imageEl.className = 'bookmark__img--base bookmark__img--logo';
-    if (this.#externalLogo) {
-      imageEl.classList.add('bookmark__img--external');
-    }
-    imageEl.style.backgroundImage = `url('${this.#getLogoUrl(this.url)}')`;
+    imageEl.replaceChildren(createSiteIcon(this.url, { source: this.#getLogoUrl(this.url) }));
   }
 
   #updateFavicon() {
@@ -88,12 +84,13 @@ class VbBookmark extends HTMLAnchorElement {
       if (titleEl) {
         titleEl.textContent = newValue;
       }
+      this.querySelector('.bookmark__delete')?.setAttribute('aria-label', `删除 ${newValue}`);
     }
     if (attr === 'image') {
       const imageEl = this.querySelector('[data-thumb]');
       const newThumbnail = this.#createBookmarkThumbnail();
       queueMicrotask(() => {
-        imageEl.replaceWith(newThumbnail);
+        imageEl?.replaceWith(newThumbnail);
       });
 
       if (!this.isFolder) {
@@ -102,7 +99,6 @@ class VbBookmark extends HTMLAnchorElement {
     }
     if (
       attr === 'href' &&
-      this.hasTitle &&
       !this.isFolder
     ) {
       this.#updateLogo();
@@ -119,13 +115,7 @@ class VbBookmark extends HTMLAnchorElement {
 
       this.#_folderChildren.forEach(child => {
         const el = bookmark.cloneNode(true);
-        if (child.image) {
-          el.classList.add('bookmark__img--contain');
-          el.style.backgroundImage = `url('${child.image}')`;
-        } else {
-          el.classList.add('bookmark__img--logo');
-          el.style.backgroundImage = `url('${this.#getLogoUrl(child.url)}')`;
-        }
+        el.append(createSiteIcon(child.url, { size: 20, source: this.#getLogoUrl(child.url) }));
         fragment.appendChild(el);
       });
 
@@ -151,7 +141,8 @@ class VbBookmark extends HTMLAnchorElement {
       class: 'bookmark__title'
     }, this.title);
 
-    caption.appendChild(title);
+    if (this.hasTitle) caption.appendChild(title);
+    caption.appendChild(this.#createDomain());
 
     return caption;
   }
@@ -175,14 +166,19 @@ class VbBookmark extends HTMLAnchorElement {
       const logo = $createElement('div', {
         class: `bookmark__img--base bookmark__img--logo${this.#externalLogo ? ' bookmark__img--external' : ''}`
       });
-      logo.style.backgroundImage = `url('${this.#getLogoUrl(this.url)}')`;
+      logo.append(createSiteIcon(this.url, { source: this.#getLogoUrl(this.url) }));
       thumbnail.appendChild(logo);
 
       if (this.image) {
         const screenshot = $createElement('div', {
           class: `bookmark__screenshot${this.isCustomImage ? ' bookmark__img--contain' : ''}`
         });
-        screenshot.style.backgroundImage = `url('${this.image}')`;
+        // An img can fail cleanly back to the logo, unlike a CSS background.
+        const preview = $createElement('img', {
+          alt: '', loading: 'lazy', decoding: 'async', draggable: 'false', src: this.image
+        });
+        preview.addEventListener('error', () => screenshot.remove(), { once: true });
+        screenshot.append(preview);
         thumbnail.appendChild(screenshot);
       }
     }
@@ -207,8 +203,7 @@ class VbBookmark extends HTMLAnchorElement {
     const stage = $createElement('div', { class: 'bookmark__stage' });
     stage.append(
       this.#createDeleteButton(),
-      this.#createBookmarkThumbnail(),
-      this.#createDomain()
+      this.#createBookmarkThumbnail()
     );
 
     if (this.isDND) {
@@ -220,9 +215,7 @@ class VbBookmark extends HTMLAnchorElement {
 
     this.append(stage);
 
-    if (this.hasTitle) {
-      this.append(this.#createBookmarkCaption());
-    }
+    this.append(this.#createBookmarkCaption());
   }
 
   #canDisplayLogo(url) {
@@ -242,7 +235,7 @@ class VbBookmark extends HTMLAnchorElement {
 
     return this.#externalLogo
       ? this.#externalLogo.replace('{{website}}', $getDomain(url))
-      : faviconURL(url, 32);
+      : faviconURL(url, 128);
   }
 
   #getFaviconUrl(url = this.url) {
