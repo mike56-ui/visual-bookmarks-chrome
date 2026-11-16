@@ -3,6 +3,7 @@
 @import "./pages/_newtab.css";
 @import "./components/_loading.css";
 @import "./components/_header.css";
+@import "./components/_folder-dock.css";
 @import "./components/_forms.css";
 @import "./components/_grid.css";
 @import "./components/_bookmark.css";

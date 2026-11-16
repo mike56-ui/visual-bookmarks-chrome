@@ -6,6 +6,22 @@
 
 Simple visual bookmarks extension for browser. The extension includes editing, searching, dragging bookmarks.
 
+## Edge folder dock build
+
+This branch uses the browser's native Bookmarks API. Creating, renaming, moving,
+or deleting an item changes the same Favorites tree that Edge uses; no separate
+bookmark database is created. Cross-device persistence therefore follows the
+Favorites sync setting of the signed-in Edge profile.
+
+```bash
+npm ci
+npm run build
+```
+
+To test the unpacked build in Edge, open `edge://extensions`, enable Developer
+mode, choose **Load unpacked**, and select the generated `extension_chrome`
+folder.
+
 <p align="center">
   <a href="https://chrome.google.com/webstore/detail/visual-bookmarks/jdbgjlehkajddoapdgpdjmlpdalfnenf" title="Google Chrome">
     <img src="https://user-images.githubusercontent.com/6150895/143011953-655cddc1-5225-4fc5-afc0-5927e45faa61.png" height="58" alt="Google Chrome Store">

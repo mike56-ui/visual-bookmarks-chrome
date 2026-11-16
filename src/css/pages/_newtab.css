@@ -30,6 +30,27 @@ body {
   }
 }
 
+body[data-folder-dock] .aside-controls,
+body[data-folder-dock] vb-scrollup,
+body[data-folder-dock] .bookmark-btn--create,
+body[data-folder-dock] .bookmark-btn--back {
+  display: none;
+}
+
+body[data-folder-dock] .app {
+  transition: margin 0.28s ease, height 0.28s ease;
+}
+
+body[data-folder-dock] .content {
+  padding: 24px 0 56px;
+}
+
+body[data-folder-dock] .empty-search {
+  color: rgb(255 255 255 / 76%);
+  background: rgb(18 22 36 / 34%);
+  backdrop-filter: blur(16px);
+}
+
 .content {
   padding: 20px 0;
 }

@@ -62,8 +62,9 @@ class VbBookmark extends HTMLAnchorElement {
   }
 
   #updateLogo() {
-    const imageEl = this.querySelector('.bookmark__img');
-    imageEl.className = 'bookmark__img bookmark__img--logo';
+    const imageEl = this.querySelector('.bookmark__img--base');
+    if (!imageEl) return;
+    imageEl.className = 'bookmark__img--base bookmark__img--logo';
     if (this.#externalLogo) {
       imageEl.classList.add('bookmark__img--external');
     }
@@ -73,7 +74,7 @@ class VbBookmark extends HTMLAnchorElement {
   #updateFavicon() {
     if (this.hasFavicon) {
       const faviconEl = this.querySelector('.bookmark__favicon');
-      faviconEl.src = this.#getFaviconUrl();
+      if (faviconEl) faviconEl.src = this.#getFaviconUrl();
     }
   }
 
@@ -104,10 +105,10 @@ class VbBookmark extends HTMLAnchorElement {
       this.hasTitle &&
       !this.isFolder
     ) {
-      if (!this.image) {
-        this.#updateLogo();
-      }
+      this.#updateLogo();
       this.#updateFavicon();
+      const domainEl = this.querySelector('.bookmark__domain');
+      if (domainEl) domainEl.textContent = $getDomain(this.url);
     }
   }
 
@@ -133,29 +134,19 @@ class VbBookmark extends HTMLAnchorElement {
     return null;
   }
 
-  #createContextButton() {
+  #createDeleteButton() {
     return $createElement('button', {
       type: 'button',
-      class: 'bookmark__action',
-      'aria-label': browser.i18n.getMessage('bookmark_context')
-    });
+      class: 'bookmark__delete',
+      title: '删除书签',
+      'aria-label': `删除 ${this.title}`
+    }, '×');
   }
 
   #createBookmarkCaption() {
     const caption = $createElement('div', {
       class: 'bookmark__caption'
     });
-    if (this.hasFavicon) {
-      const favicon = $createElement('img', {
-        class: 'bookmark__favicon',
-        width: 16,
-        height: 16,
-        src: this.isFolder ? '/img/folder.svg' : this.#getFaviconUrl(),
-        alt: ''
-      });
-      caption.appendChild(favicon);
-    }
-
     const title = $createElement('span', {
       class: 'bookmark__title'
     }, this.title);
@@ -168,10 +159,7 @@ class VbBookmark extends HTMLAnchorElement {
   #createBookmarkThumbnail() {
     const thumbnail = $createElement('div', { 'data-thumb': '', class: 'bookmark__img' });
 
-    if (this.image) {
-      thumbnail.classList.toggle('bookmark__img--contain', this.isCustomImage || this.isFolder);
-      thumbnail.style.backgroundImage = `url('${this.image}')`;
-    } else if (this.isFolder) {
+    if (this.isFolder) {
       if (this.hasFolderPreview) {
         thumbnail.classList.add('bookmark__summary-folder');
         const children = this.#renderFolderPreview();
@@ -184,12 +172,29 @@ class VbBookmark extends HTMLAnchorElement {
         thumbnail.classList.add('bookmark__img--folder');
       }
     } else {
-      thumbnail.classList.add('bookmark__img--logo');
-      thumbnail.classList.toggle('bookmark__img--external', this.#externalLogo);
-      thumbnail.style.backgroundImage = `url('${this.#getLogoUrl(this.url)}')`;
+      const logo = $createElement('div', {
+        class: `bookmark__img--base bookmark__img--logo${this.#externalLogo ? ' bookmark__img--external' : ''}`
+      });
+      logo.style.backgroundImage = `url('${this.#getLogoUrl(this.url)}')`;
+      thumbnail.appendChild(logo);
+
+      if (this.image) {
+        const screenshot = $createElement('div', {
+          class: `bookmark__screenshot${this.isCustomImage ? ' bookmark__img--contain' : ''}`
+        });
+        screenshot.style.backgroundImage = `url('${this.image}')`;
+        thumbnail.appendChild(screenshot);
+      }
     }
 
     return thumbnail;
+  }
+
+  #createDomain() {
+    return $createElement('div', {
+      class: 'bookmark__domain',
+      title: this.url
+    }, this.isFolder ? this.title : $getDomain(this.url));
   }
 
   #render() {
@@ -199,20 +204,24 @@ class VbBookmark extends HTMLAnchorElement {
       this.setAttribute('target', '_blank');
     }
 
-    this.append(
-      this.#createContextButton(),
-      this.#createBookmarkThumbnail()
+    const stage = $createElement('div', { class: 'bookmark__stage' });
+    stage.append(
+      this.#createDeleteButton(),
+      this.#createBookmarkThumbnail(),
+      this.#createDomain()
     );
 
-    if (this.hasTitle) {
-      this.append(this.#createBookmarkCaption());
-    }
-
     if (this.isDND) {
-      this.append($createElement('div', {
+      stage.append($createElement('div', {
         class: 'dropzone-bookmark',
         'data-id': this.id
       }));
+    }
+
+    this.append(stage);
+
+    if (this.hasTitle) {
+      this.append(this.#createBookmarkCaption());
     }
   }
 

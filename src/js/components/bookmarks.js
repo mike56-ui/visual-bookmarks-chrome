@@ -174,7 +174,7 @@ const Bookmarks = (() => {
     let ghost = null;
     el.sortInstance = new DragSortify(el, {
       draggableSelector: '.bookmark',
-      ignoreSelectors: ['.bookmark__action'],
+      ignoreSelectors: ['.bookmark__delete'],
       plugin: multiswap,
       onDragStart({ event, draggedElement, draggingItems }) {
         container.classList.add('has-dragging');
@@ -328,30 +328,6 @@ const Bookmarks = (() => {
     return vbBookmark;
   }
 
-  function genFolder(bookmark) {
-    const folderPreview = settings.$.folder_preview;
-    const thumbnail = THUMBNAILS_MAP.get(bookmark.id);
-    const image = thumbnail?.blobUrl;
-
-    const vbBookmark = document.createElement('a', { is: 'vb-bookmark' });
-    Object.assign(vbBookmark, {
-      id: bookmark.id,
-      url: `#${bookmark.id}`,
-      parentId: bookmark.parentId,
-      title: bookmark.title,
-      isFolder: true,
-      hasFolderPreview: folderPreview,
-      folderChidlren: folderPreview ? renderFolderChildren(bookmark) : [],
-      externalLogo: settings.$.logo_external ? settings.$.logo_external_url : null,
-      image,
-      openNewTab: settings.$.open_link_newtab,
-      hasTitle: settings.$.show_bookmark_title,
-      hasFavicon: settings.$.show_favicon,
-      isDND: settings.$.drag_and_drop
-    });
-    return vbBookmark;
-  }
-
   /**
    * Thumbnails or logos for folder render
    * @param {Object<BookmarkTreeNode>} bookmark
@@ -447,12 +423,12 @@ const Bookmarks = (() => {
    * @param {Array<BookmarkTreeNode>} arr - array of bookmarks
    * @param {boolean} [hasCreate=false] - show add bookmark button
    */
-  async function render(arr, hasCreate = false) {
+  async function render(arr) {
     dialLoading.hidden = false;
     clearContainer();
 
     // Firefox may contain a separator bookmark type, so we filter it out to avoid rendering it
-    const bookamrksArr = arr.filter(item => item.type !== 'separator');
+    const bookamrksArr = arr.filter(item => item.type !== 'separator' && item.url);
 
     // bookmarks ids array
     const bookmarksIds = bookamrksArr.map(child => child.id);
@@ -510,14 +486,14 @@ const Bookmarks = (() => {
     const fragment = document.createDocumentFragment();
 
     for (let bookmark of bookamrksArr) {
-      if (bookmark.url) {
-        fragment.appendChild(genBookmark(bookmark));
-      } else {
-        fragment.appendChild(genFolder(bookmark));
-      }
+      fragment.appendChild(genBookmark(bookmark));
     }
 
     container.appendChild(fragment);
+
+    if (!bookamrksArr.length) {
+      container.innerHTML = `<div class="empty-search">${browser.i18n.getMessage('empty_search')}</div>`;
+    }
 
     const hasBack = (window.location.hash !== '')
       && container.dataset?.parentFolder
@@ -536,16 +512,6 @@ const Bookmarks = (() => {
       );
     }
 
-    if (hasCreate) {
-      container.append(
-        $createElement('button', {
-          id: 'add',
-          class: 'bookmark-btn bookmark-btn--create md-ripple',
-          'data-create': 'New',
-          'aria-label': browser.i18n.getMessage('new_bookmark')
-        })
-      );
-    }
     dialLoading.hidden = true;
   }
 
@@ -1004,8 +970,8 @@ const Bookmarks = (() => {
     });
   }
 
-  async function removeBookmark(bookmark, isFolder = false) {
-    if (!settings.$.without_confirmation) {
+  async function removeBookmark(bookmark, isFolder = false, skipConfirmation = false) {
+    if (!skipConfirmation && !settings.$.without_confirmation) {
       const confirmMessage = isFolder
         ? browser.i18n.getMessage('confirm_delete_folder')
         : browser.i18n.getMessage('confirm_delete_bookmark');
@@ -1071,24 +1037,15 @@ const Bookmarks = (() => {
 
     return create({ title, ...(url && { url }), parentId })
       .then(result => {
-        let bookmark;
         if (result.url) {
-          bookmark = genBookmark(result);
-        } else {
-          bookmark = genFolder(result);
+          const bookmark = genBookmark(result);
+          container.append(bookmark);
+          $customTrigger('updateFolderList', document);
+          return bookmark;
         }
-        container.querySelector('.bookmark-btn--create').insertAdjacentElement('beforeBegin', bookmark);
 
         $customTrigger('updateFolderList', document);
-        // if (!result.url) {
-        //   $customTrigger('updateFolderList', document, {
-        //     detail: {
-        //       isFolder: true
-        //     }
-        //   });
-        // }
-
-        return bookmark;
+        return result;
       });
   }
 
@@ -1120,6 +1077,7 @@ const Bookmarks = (() => {
 
   return {
     init,
+    refresh: () => createSpeedDial(startFolder()),
     createBookmark,
     updateBookmark,
     removeFromBrowser,

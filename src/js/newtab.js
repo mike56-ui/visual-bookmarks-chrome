@@ -3,6 +3,7 @@ import './components/vb-select';
 import './components/vb-context-menu';
 import './components/vb-scrollup';
 import './components/vb-bookmarks-panel';
+import FolderDock from './components/folderDock';
 
 import Gmodal from 'glory-modal';
 import { settings } from './settings';
@@ -47,15 +48,12 @@ const customScreen = document.getElementById('customScreen');
 const ctxMenuEl = document.getElementById('context-menu');
 const upload = document.getElementById('upload');
 const asideControlsNode = document.getElementById('aside_controls');
-const panelActions = {
-  tween: null,
-  tweenActive: false
-};
 let multipleSelectedBookmarks = [];
 let lastSelectedBookmark = null;
 let isGenerateThumbs = false;
 let modalApi;
 let generateThumbsBtn = null;
+let nativeBookmarksRefreshTimer = null;
 
 async function init() {
   // Set lang attr
@@ -85,6 +83,11 @@ async function init() {
   UI.calculateStyles();
   UI.setBG();
 
+  const folderDock = new FolderDock(document.getElementById('folderDock'), {
+    refreshBookmarks: () => Bookmarks.refresh()
+  });
+  await folderDock.init();
+
   /**
    * Localization
    */
@@ -107,6 +110,16 @@ async function init() {
         });
     }
   });
+
+  const refreshNativeBookmarks = () => {
+    folderDock.scheduleRender();
+    window.clearTimeout(nativeBookmarksRefreshTimer);
+    nativeBookmarksRefreshTimer = window.setTimeout(() => Bookmarks.refresh(), 100);
+  };
+  browser.bookmarks.onCreated.addListener(refreshNativeBookmarks);
+  browser.bookmarks.onChanged.addListener(refreshNativeBookmarks);
+  browser.bookmarks.onRemoved.addListener(refreshNativeBookmarks);
+  browser.bookmarks.onMoved.addListener(refreshNativeBookmarks);
 
   modalApi = new Gmodal(modal, {
     stickySelectors: ['.sticky'],
@@ -220,14 +233,14 @@ function handleSelectBookmark(e) {
   const bookmark = e.target.closest('.bookmark');
   if (!bookmark) return true;
 
-  if (!e.shiftKey) return true;
+  if (!e.shiftKey && !e.ctrlKey && !e.metaKey) return true;
 
   e.preventDefault();
 
   let rangeBookmarks = [];
   const isSelected = bookmark.hasAttribute('data-selected');
 
-  if (e.ctrlKey || e.metaKey) {
+  if (e.shiftKey && lastSelectedBookmark) {
     const bookmarkNodes = Array.from(document.querySelectorAll('.bookmark'));
     // find a range of bookmarks
     const startIndex = bookmarkNodes.findIndex(bookmarkNode => bookmarkNode === bookmark);
@@ -400,10 +413,11 @@ function handleDelegateClick(evt) {
     evt.preventDefault();
     prepareModal();
     modalApi.open();
-  } else if (evt.target.closest('.bookmark__action')) {
+  } else if (evt.target.closest('.bookmark__delete')) {
     evt.preventDefault();
     evt.stopPropagation();
-    ctxMenuEl.trigger(evt);
+    const bookmark = evt.target.closest('.bookmark');
+    Bookmarks.removeBookmark(bookmark, false, true);
   } else if (evt.target.closest('.bookmark')) {
     const url = evt.target.closest('.bookmark').href;
 
