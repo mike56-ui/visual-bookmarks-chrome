@@ -58,6 +58,8 @@ async function setToggle(page, key, value) {
       ]);
       return { root, folder: folder.id, keep: keep.id, remove: remove.id, fallback: fallback.id };
     });
+    // Start with a fresh document after the native fixture-import events.
+    await page.goto('about:blank');
     await page.goto(pageUrl + '#' + data.folder);
     await page.waitForSelector(card(data.keep));
     await page.waitForSelector(card(data.remove));
