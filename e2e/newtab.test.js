@@ -12,6 +12,19 @@ describe('Chromium real-bookmark dock workflow', () => {
   let data;
   const pageErrors = [];
 
+  async function openFolder(id) {
+    const selector = `[data-folder-id="${id}"] .folder-card__open`;
+    await extPage.waitForSelector(selector, { visible: true });
+    const point = await extPage.evaluate(selector => {
+      const button = document.querySelector(selector);
+      button.scrollIntoView({ block: 'nearest' });
+      const box = button.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }, selector);
+    await extPage.mouse.click(point.x, point.y);
+    await extPage.waitForFunction(id => document.querySelector('#bookmarks').dataset.folder === id, {}, id);
+  }
+
   async function dragCard(sourceSelector, targetSelector, fraction = 0.5) {
     const source = await extPage.waitForSelector(sourceSelector);
     const target = await extPage.waitForSelector(targetSelector);
@@ -102,7 +115,7 @@ describe('Chromium real-bookmark dock workflow', () => {
   });
 
   it('loads large folders in batches while keeping the native 2x5 folder preview', async() => {
-    await extPage.click(`[data-folder-id="${data.sourceId}"]`);
+    await openFolder(data.sourceId);
     await extPage.waitForSelector(`#bookmarks [data-id="${data.bookmarkIds[0]}"]`);
 
     const state = await extPage.evaluate(sourceId => {
@@ -140,7 +153,7 @@ describe('Chromium real-bookmark dock workflow', () => {
     // Reload to start with only the first page rendered.
     await extPage.reload({ waitUntil: 'load' });
     const [first, second, third] = data.bookmarkIds;
-    await extPage.click(`[data-folder-id="${data.sourceId}"] .folder-card__open`);
+    await openFolder(data.sourceId);
     await extPage.waitForFunction(id => document.querySelector('#bookmarks .bookmark')?.dataset.id === id, {}, first);
     const original = await extPage.evaluate(async id => (await browser.bookmarks.getChildren(id)).map(node => node.id), data.sourceId);
     await dragCard(`#bookmarks [data-id="${first}"]`, `#bookmarks [data-id="${third}"]`, 0.84);
@@ -275,7 +288,7 @@ describe('Chromium real-bookmark dock workflow', () => {
   });
 
   it('creates and inline-renames a real nested folder', async() => {
-    await extPage.click(`[data-folder-id="${data.sourceId}"]`);
+    await openFolder(data.sourceId);
     await extPage.click('#folderDockAdd');
     await extPage.waitForSelector('.folder-card__rename');
     await extPage.click('.folder-card__rename', { clickCount: 3 });
@@ -334,7 +347,7 @@ describe('Chromium real-bookmark dock workflow', () => {
   });
 
   it('shows a useful empty state for an empty real folder', async() => {
-    await extPage.evaluate(id => document.querySelector(`[data-folder-id="${id}"] .folder-card__open`).click(), data.emptyId);
+    await openFolder(data.emptyId);
     await extPage.waitForFunction(id => {
       const grid = document.getElementById('bookmarks');
       return grid.dataset.folder === id && !grid.querySelector('.bookmark') && grid.querySelector('.empty-search');
@@ -386,9 +399,7 @@ describe('Chromium real-bookmark dock workflow', () => {
     await extPage.setViewport({ width: 848, height: 643 });
     await extPage.reload({ waitUntil: 'load' });
     await extPage.waitForSelector('#folderDockList .folder-card');
-    await extPage.click(`[data-folder-id="${data.sourceId}"]`);
-    await extPage.waitForFunction(id => document.getElementById('bookmarks').dataset.folder === id,
-      {}, data.sourceId);
+    await openFolder(data.sourceId);
     await loadAllBookmarks(238);
     await extPage.screenshot({
       path: path.join(OUTPUT_DIR, 'edge-real-data-848.png')
