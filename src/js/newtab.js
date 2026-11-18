@@ -4,6 +4,7 @@ import './components/vb-context-menu';
 import './components/vb-scrollup';
 import './components/vb-bookmarks-panel';
 import FolderDock from './components/folderDock';
+import bindMotionDrag from './components/motionDrag';
 
 import Gmodal from 'glory-modal';
 import { settings } from './settings';
@@ -29,9 +30,10 @@ import {
   $notifications,
   checkClipboardImage
 } from './utils';
+import { recordOpen, USAGE_KEY } from './api/usage';
+import './trackBookmarkOpens';
 import ImageDB from './api/imageDB';
 import { CONTEXT_MENU, LOCAL_PROTOCOLS } from './constants';
-import { bookmarksToDelete } from './state';
 import Toast from './components/toast';
 import { storage } from './api/storage';
 import { containsPermissions } from './api/permissions';
@@ -50,10 +52,12 @@ const upload = document.getElementById('upload');
 const asideControlsNode = document.getElementById('aside_controls');
 let multipleSelectedBookmarks = [];
 let lastSelectedBookmark = null;
+let selectionPanelRequest;
 let isGenerateThumbs = false;
 let modalApi;
 let generateThumbsBtn = null;
 let nativeBookmarksRefreshTimer = null;
+let gridRefreshPending = false;
 
 async function init() {
   // Set lang attr
@@ -65,9 +69,6 @@ async function init() {
 
   window.addEventListener('resize', () => UI.calculateStyles());
   window.addEventListener('popstate', handlePopstate);
-  window.addEventListener('beforeunload', handleBeforeUnload);
-  window.addEventListener('pagehide', handlePagehide);
-  window.addEventListener('storage', handleUpdateStorage);
   window.addEventListener('load', handleLoad);
   window.addEventListener('hashchange', hideControlMultiplyBookmarks);
 
@@ -87,6 +88,22 @@ async function init() {
     refreshBookmarks: () => Bookmarks.refresh()
   });
   await folderDock.init();
+  bindMotionDrag({
+    grid: container,
+    folderList: document.getElementById('folderDockList'),
+    canDrag: () => settings.$.drag_and_drop,
+    canReorder: () => Bookmarks.canReorder(),
+    reorderBookmarks: (ids, target, after) => Bookmarks.reorderBookmarks(ids, target, after),
+    moveBookmarks: async(ids, destination) => {
+      const moved = await Bookmarks.moveBookmarks(ids, destination);
+      if (moved) await folderDock.render();
+      return moved;
+    },
+    reorderFolders: (id, target, after) => folderDock.reorderFolders(id, target, after)
+  });
+  document.addEventListener('newtab:restore-common-order', () => {
+    Bookmarks.restoreCommonOrder().catch(console.warn);
+  });
 
   /**
    * Localization
@@ -111,19 +128,27 @@ async function init() {
     }
   });
 
+  const scheduleGridRefresh = () => {
+    window.clearTimeout(nativeBookmarksRefreshTimer);
+    nativeBookmarksRefreshTimer = window.setTimeout(Bookmarks.refreshFromNative, 100);
+  };
   const refreshNativeBookmarks = () => {
     folderDock.scheduleRender();
-    window.clearTimeout(nativeBookmarksRefreshTimer);
-    nativeBookmarksRefreshTimer = window.setTimeout(() => Bookmarks.refresh(), 100);
+    scheduleGridRefresh();
   };
   browser.bookmarks.onCreated.addListener(refreshNativeBookmarks);
   browser.bookmarks.onChanged.addListener(refreshNativeBookmarks);
   browser.bookmarks.onRemoved.addListener(refreshNativeBookmarks);
   browser.bookmarks.onMoved.addListener(refreshNativeBookmarks);
+  browser.bookmarks.onChildrenReordered?.addListener(refreshNativeBookmarks);
 
   modalApi = new Gmodal(modal, {
     stickySelectors: ['.sticky'],
     closeBackdrop: false
+  });
+  document.addEventListener('newtab:add-bookmark', () => {
+    prepareModal();
+    modalApi.open();
   });
   modalApi.element.addEventListener('gmodal:beforeopen', () => {
     // reset form and validation errors
@@ -186,30 +211,34 @@ async function init() {
     });
     document.getElementById('aside_controls').appendChild(generateThumbsBtn);
 
-    // Thumbnail generation tracking events
-    // Switching the flag in the local storage to prevent multiple launches
-    // Reset the flag when you close the window
-    if (localStorage.getItem('update_thumbnails') === 'true') {
-      // if the storage has a launch flag for generating thumbnails, disable button
-      generateThumbsBtn.disabled = true;
-    }
-    container.addEventListener('thumbnails:updating', function() {
-      isGenerateThumbs = true;
-      generateThumbsBtn.disabled = true;
-      localStorage.setItem('update_thumbnails', true);
-    });
-    container.addEventListener('thumbnails:updated', function() {
-      isGenerateThumbs = false;
-      generateThumbsBtn.disabled = false;
-      localStorage.removeItem('update_thumbnails');
-    });
     generateThumbsBtn.addEventListener('click', handleGenerateThumbs);
   }
+  container.addEventListener('thumbnails:updating', () => {
+    isGenerateThumbs = true;
+    if (generateThumbsBtn) generateThumbsBtn.disabled = true;
+  });
+  container.addEventListener('thumbnails:updated', () => {
+    isGenerateThumbs = false;
+    if (generateThumbsBtn) generateThumbsBtn.disabled = false;
+  });
 
-  // if tab with bookmarks is open, but hidden, we need to reload, after updating thumbnails
-  browser.runtime.onMessage.addListener(function(request) {
-    if (request.bookmarksUpdated && document.hidden) {
-      window.location.reload();
+  const refreshGridWhenVisible = () => {
+    if (gridRefreshPending && !document.hidden && document.hasFocus()) {
+      gridRefreshPending = false;
+      scheduleGridRefresh();
+    }
+  };
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[USAGE_KEY]) gridRefreshPending = true;
+  });
+  window.addEventListener('pageshow', refreshGridWhenVisible);
+  window.addEventListener('focus', refreshGridWhenVisible);
+  document.addEventListener('visibilitychange', refreshGridWhenVisible);
+  browser.runtime.onMessage.addListener(request => {
+    if (request?.bookmarksUpdated) refreshNativeBookmarks();
+    if (request?.visitPreviewUpdated) {
+      gridRefreshPending = true;
+      refreshGridWhenVisible();
     }
   });
 
@@ -231,7 +260,7 @@ async function init() {
 function handleSelectBookmark(e) {
   if (isGenerateThumbs) return;
   const bookmark = e.target.closest('.bookmark');
-  if (!bookmark) return true;
+  if (!bookmark || bookmark.hidden || e.target.closest('.bookmark__delete')) return true;
 
   if (!e.shiftKey && !e.ctrlKey && !e.metaKey) return true;
 
@@ -240,8 +269,8 @@ function handleSelectBookmark(e) {
   let rangeBookmarks = [];
   const isSelected = bookmark.hasAttribute('data-selected');
 
-  if (e.shiftKey && lastSelectedBookmark) {
-    const bookmarkNodes = Array.from(document.querySelectorAll('.bookmark'));
+  if (e.shiftKey && container.contains(lastSelectedBookmark) && !lastSelectedBookmark.hidden) {
+    const bookmarkNodes = Array.from(container.querySelectorAll('.bookmark:not([hidden])'));
     // find a range of bookmarks
     const startIndex = bookmarkNodes.findIndex(bookmarkNode => bookmarkNode === bookmark);
     const endIndex = bookmarkNodes.findIndex(bookmarkNode => bookmarkNode === (lastSelectedBookmark ?? bookmark));
@@ -280,54 +309,71 @@ function dispatchSelectedBookmarks() {
 
 async function showControlMultiplyBookmarks() {
   dispatchSelectedBookmarks();
+  if (document.getElementById('bookmarks-panel') || selectionPanelRequest) return;
 
-  if (document.getElementById('bookmarks-panel')) return;
+  const request = {};
+  selectionPanelRequest = request;
+  try {
+    const folders = await getFolders();
+    if (selectionPanelRequest !== request || !multipleSelectedBookmarks.length) return;
 
-  const vbBookmarksPanel = $createElement('vb-bookmarks-panel', {
-    id: 'bookmarks-panel',
-    class: 'bookmarks-panel'
-  });
-  vbBookmarksPanel.selectedFolder = window.location.hash.slice(1) || settings.$.default_folder_id;
-  vbBookmarksPanel.folders = await getFolders();
-
-  document.body.append(vbBookmarksPanel);
-  vbBookmarksPanel.show();
+    const panel = $createElement('vb-bookmarks-panel', {
+      id: 'bookmarks-panel',
+      class: 'bookmarks-panel'
+    });
+    const parents = new Set(multipleSelectedBookmarks.map(bookmark => bookmark.parentId));
+    panel.selectedFolder = parents.size === 1 ? multipleSelectedBookmarks[0].parentId : '';
+    panel.folders = folders;
+    document.body.append(panel);
+    panel.show();
+  } catch (error) {
+    console.warn(error);
+    if (selectionPanelRequest === request) hideControlMultiplyBookmarks();
+  } finally {
+    if (selectionPanelRequest === request) selectionPanelRequest = null;
+  }
 }
 
 async function hideControlMultiplyBookmarks() {
-  const vbBookmarksPanel = document.getElementById('bookmarks-panel');
-  if (!vbBookmarksPanel) return;
-  // we need reset reset lastSelectedBookmark
+  const panel = document.getElementById('bookmarks-panel');
+  selectionPanelRequest = null;
   lastSelectedBookmark = null;
-
   multipleSelectedBookmarks.forEach(bookmark => delete bookmark.dataset.selected);
-  multipleSelectedBookmarks.length = 0;
-
+  multipleSelectedBookmarks = [];
   dispatchSelectedBookmarks();
 
-  await vbBookmarksPanel.hide();
-  vbBookmarksPanel.remove();
+  if (!panel) return;
+  panel.removeAttribute('id');
+  await panel.hide();
+  panel.remove();
 }
 
 function handleMultipleBookmarks(evt) {
   const { action, destFolder } = evt.detail;
-
-  if (!action) return;
+  const selected = multipleSelectedBookmarks.filter(bookmark => container.contains(bookmark) && !bookmark.hidden);
+  if (!action || !selected.length) return;
 
   switch (action) {
     case 'open_all':
     case 'open_all_window':
-    case 'new_window_incognito': openSelectedBookmarks(multipleSelectedBookmarks, action); break;
-    case 'remove': removeSelectedBookmarks(multipleSelectedBookmarks); break;
-    case 'update_thumbnails': updateSelectedThumbnails(multipleSelectedBookmarks); break;
-    case 'move_bookmarks': movedSelectedBookmarks(multipleSelectedBookmarks, destFolder); break;
+    case 'new_window_incognito': openSelectedBookmarks(selected, action); break;
+    case 'remove': removeSelectedBookmarks(selected); break;
+    case 'update_thumbnails': updateSelectedThumbnails(selected); break;
+    case 'move_bookmarks': movedSelectedBookmarks(selected, destFolder); break;
     default: break;
   }
 }
 
 async function movedSelectedBookmarks(multipleSelectedBookmarks, destFolder) {
-  await Bookmarks.moveSelectedBookmarks(multipleSelectedBookmarks, destFolder);
-  hideControlMultiplyBookmarks();
+  try {
+    await Bookmarks.moveSelectedBookmarks(multipleSelectedBookmarks, destFolder);
+  } catch (error) {
+    console.warn(error);
+    Toast.show(browser.i18n.getMessage('notice_bookmark_operation_failed') || 'Some bookmarks could not be moved.');
+  } finally {
+    hideControlMultiplyBookmarks();
+    Bookmarks.refresh();
+  }
 }
 
 async function updateSelectedThumbnails(multipleSelectedBookmarks) {
@@ -364,45 +410,10 @@ function handlePopstate() {
   modalApi.close();
 }
 
-function handleBeforeUnload(evt) {
-  // if generate thumbs exist
-  // if (bookmarksToDelete.size > 0) {
-  browser.runtime.sendMessage({
-    bookmarksToDelete
-  });
-  // }
-
-  if (localStorage.getItem('update_thumbnails') !== null && isGenerateThumbs)
-    return evt.returnValue = 'Are you shure?';
-}
-
-function handlePagehide() {
-  // remove flag from storage to unlock button generate
-  if (isGenerateThumbs) {
-    localStorage.removeItem('update_thumbnails');
-  }
-
-  // browser.runtime.sendMessage({
-  //   bookmarksToDelete
-  // });
-}
-
-function handleUpdateStorage(e) {
-  // If several tabs are open, on the rest of them we will update the attribute at the button
-  if (e.key === 'update_thumbnails') {
-    generateThumbsBtn.disabled = !!e.newValue;
-  }
-}
-
 async function handleGenerateThumbs() {
-  if (!(await Bookmarks.checkHostPermissions())) {
-    return;
+  if (!isGenerateThumbs && await Bookmarks.checkHostPermissions()) {
+    await Bookmarks.autoUpdateThumb();
   }
-
-  // method to start generating all bookmark thumbnails
-  if (this.hasAttribute('disabled') || localStorage.getItem('update_thumbnails') !== null) return;
-
-  Bookmarks.autoUpdateThumb();
 }
 
 function handleDelegateClick(evt) {
@@ -488,18 +499,25 @@ async function handleMenuSelection(evt) {
   switch (action) {
     case 'new_window':
     case 'new_window_incognito':
-      openWindow(target.href, action);
+      openWindow(target.href, action, target.id);
       break;
     case 'open_all':
     case 'open_all_window':
       openAll(target.id, action);
       break;
     case 'new_tab':
-      openTab(target.href);
+      openTab(target.href, {}, target.id);
       break;
     case 'edit':
       prepareModal(target);
       modalApi.open();
+      break;
+    case 'move':
+      multipleSelectedBookmarks = [target];
+      lastSelectedBookmark = target;
+      target.setAttribute('data-selected', '');
+      await showControlMultiplyBookmarks();
+      document.querySelector('#bookmarks-panel select')?.focus();
       break;
     case 'copy_link':
       $copyStr(target.href);
@@ -522,10 +540,7 @@ async function handleMenuSelection(evt) {
       break;
     }
     case 'delete_thumbnail': {
-      Bookmarks.removeThumbnail(target.id)
-        .then(() => {
-          target.image = null;
-        });
+      Bookmarks.removeThumbnail(target.id, target.href);
       break;
     }
     case 'remove': {
@@ -540,6 +555,7 @@ async function handleUploadScreen(evt) {
 
   const input = evt.target;
   const file = input.files[0];
+  if (!file) return;
   const { id } = input.dataset;
   const bookmark = document.getElementById(`vb-${id}`);
 
@@ -618,7 +634,7 @@ function openSelectedBookmarks(multipleSelectedBookmarks, action) {
     })
       .then(win => {
         multipleSelectedBookmarks.forEach(bookmark => {
-          openTab(bookmark.url, { windowId: win.id });
+          openTab(bookmark.url, { windowId: win.id }, win.incognito ? null : bookmark.id);
         });
       })
       .catch(() => {
@@ -626,7 +642,7 @@ function openSelectedBookmarks(multipleSelectedBookmarks, action) {
       });
   } else if (action === 'open_all') {
     multipleSelectedBookmarks.forEach(bookmark => {
-      openTab(bookmark.url);
+      openTab(bookmark.url, {}, bookmark.id);
     });
   }
 }
@@ -648,10 +664,10 @@ function openAll(id, action) {
           focused: true
         })
           .then(win => {
-            bookmarks.forEach(bookmark => openTab(bookmark.url, { windowId: win.id }));
+            bookmarks.forEach(bookmark => openTab(bookmark.url, { windowId: win.id }, bookmark.id));
           });
       } else {
-        bookmarks.forEach(bookmark => openTab(bookmark.url));
+        bookmarks.forEach(bookmark => openTab(bookmark.url, {}, bookmark.id));
       }
     });
 }
@@ -661,14 +677,14 @@ function openAll(id, action) {
  * @param {string} url - bookmark URL
  * @param {string} action - action to run
  */
-function openWindow(url, action) {
+function openWindow(url, action, id) {
   const isIncognitoMode = action === 'new_window_incognito';
 
   browser.windows.create({
     url: url,
     state: 'maximized',
     incognito: isIncognitoMode
-  })
+  }).then(() => { if (!isIncognitoMode) recordOpen(id); })
     .catch(() => {
       isIncognitoMode && $notifications(browser.i18n.getMessage('incognito_access_note'));
     });
@@ -685,7 +701,7 @@ function openWindow(url, action) {
  * @param {string} [options.url]
  * @param {number} [options.windowId]
  */
-function openTab(url, options = {}) {
+function openTab(url, options = {}, id) {
   if (url.startsWith('#')) {
     url = `newtab.html${url}`;
   }
@@ -694,53 +710,30 @@ function openTab(url, options = {}) {
     url: url,
     active: false
   };
-  try {
-    browser.tabs.create({
-      ...defaults,
-      ...options
-    });
-  } catch (e) {}
+  browser.tabs.create({ ...defaults, ...options }).then(() => recordOpen(id)).catch(() => {});
 }
 
 async function handleSubmitForm(evt) {
   evt.preventDefault();
   const form = evt.target;
+  if (form.dataset.saving) return;
   const id = form.getAttribute('data-action');
   const title = form.title.value.trim();
   const url = form.url.value.trim();
-
-  let bookmark = false;
-
-  // Firefox is terrible 💩💩💩
-  // run the permission check at the very top level
-  // permissions.request may only be called from a user input handler (firefox can't catch a function in the trace via promises)
-  let permission = false;
-  if (url && form.dataset.oldUrl !== url && settings.$.auto_generate_thumbnail) {
-    permission = await Bookmarks.checkHostPermissions();
+  form.dataset.saving = 'true';
+  try {
+    if (id === 'New') {
+      await Bookmarks.createBookmark(title, url);
+    } else {
+      await Bookmarks.updateBookmark(id, title, url, modalSelectFolders.value);
+    }
+    modalApi.close();
+  } catch (error) {
+    console.warn(error);
+    Toast.show(browser.i18n.getMessage('notice_bookmark_operation_failed') || 'The bookmark could not be saved.');
+  } finally {
+    delete form.dataset.saving;
   }
-
-  if (id !== 'New') {
-    const newLocation = modalSelectFolders.value;
-    bookmark = await Bookmarks.updateBookmark(id, title, url, newLocation);
-  } else {
-    bookmark = await Bookmarks.createBookmark(title, url);
-  }
-
-  // Firefox
-  // run the permission check at the very top level
-  // permissions.request may only be called from a user input handler (firefox can't catch a function in the trace via promises)
-  // that's why I moved the screenshot creation to this place
-  if (
-    (url && form.dataset.oldUrl !== url)
-    && permission
-    && bookmark
-    && settings.$.auto_generate_thumbnail
-  ) {
-    // update thumbnail if thumbnail generation option is enabled and if it is not a folder
-    Bookmarks.createScreen(bookmark, permission);
-  }
-
-  bookmark && modalApi.close();
 }
 
 async function handleResetThumb(evt) {
@@ -752,12 +745,8 @@ async function handleResetThumb(evt) {
   evt.preventDefault();
   const id = this.getAttribute('data-bookmark');
 
-  Bookmarks.removeThumbnail(id)
-    .then(() => {
-      const bookmark = document.getElementById(`vb-${id}`);
-      bookmark.image = null;
-      this.closest('#customScreen').style.display = '';
-    });
+  await Bookmarks.removeThumbnail(id);
+  this.closest('#customScreen').style.display = '';
 }
 
 async function prepareModal(target) {

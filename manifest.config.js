@@ -9,7 +9,7 @@ const common = {
   default_locale: 'en',
   name: '__MSG_ext_name__',
   description: '__MSG_ext_desc__',
-  version: releaseBuild ? `7.7.1.${releaseBuild}` : '7.7.1',
+  version: releaseBuild ? `7.7.3.${releaseBuild}` : '7.7.3',
   icons: {
     16: 'icons/icon16.png',
     48: 'icons/icon48.png',
@@ -68,6 +68,7 @@ export function getManifest(browser) {
 
   return {
     ...common,
+    permissions: [...common.permissions, 'favicon'],
     background: {
       service_worker: 'background.js',
       type: 'module'

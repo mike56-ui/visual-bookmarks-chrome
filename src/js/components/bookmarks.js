@@ -2,10 +2,17 @@ import { DragSortify } from '../plugins/dragSortify';
 import { multiswap } from '../plugins/dragSortify/multiswap';
 import Toast from './toast';
 import ImageDB from '../api/imageDB';
+import { readUsage } from '../api/usage';
 import { settings, LAST_OPENED_FOLDER_ID } from '../settings';
 import { storage } from '../api/storage';
 import {
+  bookmarkOrderKey, orderAround, planNativeOrder, restoreOrder, sameOrder, withOrganizationLock
+} from '../api/bookmarkOrder';
+import {
   move,
+  get,
+  getChildren,
+  getThree,
   getSubTree,
   search as searchBookmarks,
   remove,
@@ -15,11 +22,9 @@ import {
   flattenArrayBookmarks
 } from '../api/bookmark';
 import {
-  $debounce,
   $customTrigger,
-  $shuffle,
   $createElement,
-  $notifications,
+  $escapeHtml,
   $resizeThumbnail
 } from '../utils';
 import {
@@ -37,11 +42,18 @@ import './vb-bookmark';
  */
 const Bookmarks = (() => {
   const THUMBNAILS_MAP = new Map();
-  const THUMBNAILS_CREATION_QUEUE = [];
   const DROPZONE_SELECTOR = '.dropzone-bookmark';
+  const PAGE_SIZE = 96;
   const container = document.getElementById('bookmarks');
   const dialLoading = document.getElementById('dial_loading');
   let isGeneratedThumbs = false;
+  let viewRequest = 0;
+  let searchTimer;
+  let searchQuery = '';
+  let organizing = false;
+  let currentPage = null;
+  let pageObserver;
+  let nativeRefreshTimer;
 
   async function init() {
     // screen sizes needed for the service worker
@@ -82,50 +94,22 @@ const Bookmarks = (() => {
       vbHeader.setAttribute('folder-id', startFolder());
       document.querySelector('header').append(vbHeader);
 
-      let hasSearch = false;
-      const searchHandler = $debounce(({ detail }) => {
-        if (!detail.isBookmarksEngine) {
-          if (hasSearch) {
-            hasSearch = false;
-            createSpeedDial(startFolder());
-            document.body.classList.remove('has-search');
-          }
-          return;
-        }
-
-        const query = detail.search.trim();
-        if (!query.length) {
-          hasSearch = false;
-          createSpeedDial(startFolder());
-        } else {
-          hasSearch = true;
-          search(query);
-        }
-        document.body.classList.toggle('has-search', hasSearch);
-      }, 500);
-      const searchResetHandler = () => {
-        hasSearch = false;
-        createSpeedDial(startFolder());
-        document.body.classList.remove('has-search');
-      };
-
-      vbHeader.addEventListener('vb:search', searchHandler);
-      vbHeader.addEventListener('vb:searchreset', searchResetHandler);
+      vbHeader.addEventListener('vb:search', ({ detail }) => {
+        const query = detail.isBookmarksEngine ? detail.search.trim() : '';
+        if (query === searchQuery) return;
+        searchQuery = query;
+        viewRequest++;
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(refresh, query ? 180 : 0);
+      });
+      vbHeader.addEventListener('vb:searchreset', () => {
+        searchQuery = '';
+        refresh();
+      });
     }
 
     // Change the current dial if the page hash changes
-    window.addEventListener('hashchange', async function() {
-      const folderId = startFolder();
-      await createSpeedDial(folderId);
-
-      // Save the ID of the last opened folder
-      localStorage.setItem(LAST_OPENED_FOLDER_ID, folderId);
-
-      $customTrigger('changeFolder', container, {
-        detail: { folderId },
-        bubbles: true
-      });
-    }, false);
+    window.addEventListener('hashchange', refresh);
 
     document.addEventListener('bookmark-removed', ({ detail }) => {
       // on any action, folder change or bookmark removal (from DOM)
@@ -149,8 +133,14 @@ const Bookmarks = (() => {
       }
     });
 
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && currentPage && changes[bookmarkOrderKey(currentPage.folderId)] && !organizing) {
+        refreshFromNative();
+      }
+    });
+
     // Create speeddial
-    return createSpeedDial(startFolder());
+    return refresh();
   }
 
   // helper to turn on the dropzone lighting
@@ -172,6 +162,16 @@ const Bookmarks = (() => {
 
   function initDrag(el) {
     let ghost = null;
+    el.addEventListener('drop', event => {
+      const target = event.target.closest('.bookmark');
+      const dragged = [...el.querySelectorAll('.bookmark.dragging')];
+      if (!target || !dragged.length) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const rect = target.getBoundingClientRect();
+      reorderBookmarks(dragged.map(item => item.dataset.id), target.dataset.id,
+        event.clientX >= rect.left + rect.width / 2);
+    }, true);
     el.sortInstance = new DragSortify(el, {
       draggableSelector: '.bookmark',
       ignoreSelectors: ['.bookmark__delete'],
@@ -188,9 +188,6 @@ const Bookmarks = (() => {
         const classes = ['drag-ghost'];
         ghost = draggedElement.cloneNode(true);
         ghost.externalLogo = settings.$.logo_external ? settings.$.logo_external_url : null;
-        if (ghost.isFolder && settings.$.folder_preview) {
-          ghost.folderChidlren = renderFolderChildren(ghost);
-        }
         document.body.appendChild(ghost);
 
         if (process.env.BROWSER === 'firefox') {
@@ -232,56 +229,9 @@ const Bookmarks = (() => {
           ghost = null;
         }
       },
-      onUpdate() {
-        Array.from(container.querySelectorAll('.bookmark')).forEach(async(item, index) => {
-          await move(item.getAttribute('data-id'), {
-            'parentId': container.dataset.folder,
-            'index': index
-          }).catch(console.warn);
-        });
-      },
       onAdd({ item, target }) {
-        const id = item.dataset.id;
-        const destination = {
-          parentId: target.dataset.id,
-          ...(settings.$.move_to_start && { index: 0 })
-        };
-        const dropZoneRect = target.getBoundingClientRect();
-        const cardRect = item.getBoundingClientRect();
-        const translateX = dropZoneRect.left + dropZoneRect.width / 2 - cardRect.left - cardRect.width / 2;
-        const translateY = dropZoneRect.top + dropZoneRect.height / 2 - cardRect.top - cardRect.height / 2;
-        const animation = item.animate(
-          [
-            {
-              offset: 0,
-              transform: 'none',
-              opacity: 1
-            },
-            {
-              offset: 0.85,
-              transform: `translate(${translateX}px, ${translateY}px) scale(0.75)`,
-              opacity: 0.5
-            },
-            {
-              offset: 1,
-              transform: `translate(${translateX}px, ${translateY}px) scale(0.3)`,
-              opacity: 0
-            }
-          ],
-          {
-            duration: 500,
-            easing: 'cubic-bezier(0, 0.55, 0.45, 1)',
-            fill: 'forwards'
-          }
-        );
-        animation.onfinish = () => {
-          item.remove();
-          move(id, destination)
-            .then(() => {
-              $customTrigger('updateFolderList', document);
-              $customTrigger('vb-bookmarks-panel:close', document);
-            });
-        };
+        const dragged = [...el.querySelectorAll('.bookmark.dragging')];
+        if (item === dragged[0]) moveBookmarks(dragged.map(card => card.dataset.id), target.dataset.id);
       }
     });
     document.addEventListener('vb:bookmarks:select', (e) => {
@@ -325,238 +275,388 @@ const Bookmarks = (() => {
       hasTitle: settings.$.show_bookmark_title,
       hasFavicon: settings.$.show_favicon
     });
+    vbBookmark.dataset.parentId = bookmark.parentId;
     return vbBookmark;
   }
 
-  /**
-   * Thumbnails or logos for folder render
-   * @param {Object<BookmarkTreeNode>} bookmark
-   * @returns {Array<Object>} thumbnail object
-   */
-  function renderFolderChildren(bookmark) {
-    const thumbnail = THUMBNAILS_MAP.get(bookmark.id);
-
-    if (!thumbnail?.children) return [];
-
-    return thumbnail.children.map(thumbnailChild => ({
-      ...thumbnailChild,
-      image: thumbnailChild.blobUrl
-    }));
+  async function readFolder(requestedId) {
+    const candidates = new Set([requestedId, String(settings.$.default_folder_id), DEFAULT_BOOKMARKS_FOLDER]);
+    for (const id of candidates) {
+      try {
+        const [folder] = await getSubTree(id);
+        if (Array.isArray(folder?.children) && !ROOT_FOLDERS.includes(folder.id)) return folder;
+      } catch {
+        // A folder can disappear in another tab or device. Try the next candidate.
+      }
+    }
+    const roots = await getThree();
+    return roots.find(folder => Array.isArray(folder.children) && !folder.unmodifiable);
   }
 
-  function clearContainer() {
-    if (!container.firstChild) return;
+  function applyFolder(folder, requestedId, searching) {
+    const previousId = container.dataset.folder;
+    container.dataset.folder = folder.id;
+    if (!searching && folder.parentId && !ROOT_FOLDERS.includes(folder.parentId)) {
+      container.dataset.parentFolder = folder.parentId;
+    } else {
+      delete container.dataset.parentFolder;
+    }
 
-    while (container.firstChild) {
-      container.firstChild.remove();
+    const recovered = requestedId !== folder.id;
+    if (recovered) {
+      history.replaceState(null, '', '#' + encodeURIComponent(folder.id));
+      $customTrigger('updateFolderList', document);
+      if (requestedId === String(settings.$.default_folder_id) && !folder.unmodifiable) {
+        settings.updateKey('default_folder_id', folder.id).catch(console.warn);
+      }
+    }
+    localStorage.setItem(LAST_OPENED_FOLDER_ID, folder.id);
+    if (recovered || previousId !== folder.id) {
+      $customTrigger('changeFolder', container, { detail: { folderId: folder.id }, bubbles: true });
     }
   }
 
-  /**
-   * Create an array of strings from bookmarks inside a folder
-   * @param {Array<BookmarkTreeNode>} bookmarks
-   * @returns {Array<String>} array id
-   */
-  function getChildrenBookmarks(bookmarks) {
-    return bookmarks.reduce((acc, bookmark) => {
-      if (bookmark.children) {
-        const children = $shuffle(bookmark.children);
-        acc.push(
-          ...children
-            .reduce((acc, child) => {
-              if (!child.children) {
-                acc.push(child);
-              }
-              return acc;
-            }, [])
-            .slice(0, 4)
-        );
-      }
-      return acc;
-    }, []);
+  function hasMoreBookmarks() {
+    return currentPage && currentPage.offset < currentPage.items.length;
   }
 
-  /**
-   * Set thumbnails map for folders
-   * @param {Array<Object>} existingChildrenThumbnails
-   * @param {Array<BookmarkTreeNode>} childrenBookmarks
-   */
-  function setChildrenThumbnails(existingChildrenThumbnails, childrenBookmarks) {
-    // prepare an array of thumbnails
-    const thumbnails = childrenBookmarks.reduce((acc, bookmark) => {
-      // search for a thumbnail among existing thumbnails
-      let thumbnail = existingChildrenThumbnails.find(thumbnail => thumbnail.id === bookmark.id);
+  function canReorder() {
+    return Boolean(settings.$.drag_and_drop && currentPage && !searchQuery && !organizing
+      && !isGeneratedThumbs && !container.hasAttribute('aria-busy'));
+  }
 
-      if (thumbnail?.blob) {
-        // if there is a thumbnail, we create a key that stores the url
-        thumbnail.blobUrl = URL.createObjectURL(thumbnail.blob);
-      } else {
-        // if there is no thumbnail, create an object with id to display the logo later
-        thumbnail = { id: bookmark.id, url: bookmark.url };
+  async function readOrderRecord(folderId) {
+    const key = bookmarkOrderKey(folderId);
+    const record = (await storage.local.get(key))[key];
+    if (record?.mode === 'manual' && Array.isArray(record.ids)) return record;
+    return record?.mode === 'common' ? record : null;
+  }
+
+  async function writeOrderRecord(folderId, record) {
+    const key = bookmarkOrderKey(folderId);
+    if (record) await storage.local.set({ [key]: record });
+    else await storage.local.remove(key);
+  }
+
+  function sameOrderRecord(current, expected) {
+    return current?.mode === expected?.mode
+      && (current?.mode !== 'manual' || sameOrder(current.ids, expected.ids));
+  }
+
+  function organize(task) {
+    return withOrganizationLock(async() => {
+      organizing = true;
+      try {
+        return await task();
+      } finally {
+        organizing = false;
       }
+    });
+  }
 
-      // each folder must contain an array of thumbnails
-      if (!Array.isArray(acc?.[bookmark.parentId])) {
-        // if the folder is not filled yet, create an object and an array inside it
-        acc[bookmark.parentId] = [];
+  const text = (zh, en) => document.documentElement.lang.startsWith('zh') ? zh : en;
+
+  function showOrganizationUndo(message, undo) {
+    Toast.show({
+      message,
+      delay: 8500,
+      progress: true,
+      hideByClick: false,
+      action: {
+        html: browser.i18n.getMessage('undo'),
+        class: ['btn', 'btn--clear', 'md-ripple'],
+        callback(event, hideToast) {
+          hideToast();
+          undo().catch(error => {
+            console.warn(error);
+            showOperationFailure();
+          });
+        }
       }
-      // add folder thumbnail
-      acc[bookmark.parentId].push(thumbnail);
-      return acc;
-    }, {});
+    });
+  }
 
-    // iterate through the array of thumbnail keys
-    // add thumbnails to thumbnail map
-    Object.keys(thumbnails).forEach(key => {
-      const parentFolderThumb = THUMBNAILS_MAP.get(key) ?? {};
+  async function applyNativeOrder(folderId, before, desired, selected, barriers) {
+    const plan = planNativeOrder(before, desired, selected, barriers);
+    if (!plan) return { synchronized: false, ids: null };
 
-      THUMBNAILS_MAP.set(key, {
-        id: key,
-        ...parentFolderThumb,
-        children: thumbnails[key]
+    const expected = [...before];
+    for (const { id, from, to, insertion } of plan) {
+      const actual = (await getChildren(folderId)).map(node => node.id);
+      if (!sameOrder(expected, actual)) return { synchronized: false, ids: null };
+      try {
+        const moved = await move(id, { parentId: folderId, index: insertion });
+        if (moved.parentId !== folderId || moved.index !== to) return { synchronized: false, ids: null };
+      } catch (error) {
+        console.warn(error);
+        return { synchronized: false, ids: expected };
+      }
+      expected.splice(from, 1);
+      expected.splice(to, 0, id);
+    }
+    const actual = (await getChildren(folderId)).map(node => node.id);
+    return { synchronized: sameOrder(expected, actual), ids: sameOrder(expected, actual) ? expected : null };
+  }
+
+  async function undoOrdering(folderId, previous, next, native) {
+    const result = await organize(async() => {
+      const saved = await readOrderRecord(folderId);
+      if (!sameOrderRecord(saved, next)) return false;
+      if (native) {
+        const actual = (await getChildren(folderId).catch(() => [])).map(node => node.id);
+        if (!sameOrder(actual, native.after)) return false;
+        const restored = await applyNativeOrder(folderId, actual, native.before, native.selected, native.barriers);
+        if (!restored.synchronized) return false;
+      }
+      await writeOrderRecord(folderId, previous);
+      return true;
+    });
+    $customTrigger('updateFolderList', document);
+    await refresh();
+    if (!result) {
+      Toast.show(text('收藏夹已发生变化，无法安全撤销。', 'Bookmarks changed elsewhere. The order could not be undone.'));
+    }
+  }
+
+  async function reorderBookmarks(ids, targetId, after) {
+    if (!canReorder()) return false;
+    const view = currentPage;
+    const selected = [...new Set(ids)];
+    try {
+      const result = await organize(async() => {
+        if (currentPage !== view || searchQuery || container.dataset.folder !== view.folderId) return null;
+        const { folderId } = view;
+        const previous = await readOrderRecord(folderId);
+        if (!sameOrderRecord(previous, view.order)) return null;
+        const children = await getChildren(folderId);
+        const links = children.filter(node => node.url && !Object.hasOwn(bookmarksToDelete, node.id));
+        const byId = new Map(links.map(node => [node.id, node]));
+        if (!byId.has(targetId) || !selected.every(id => byId.has(id))) return null;
+        const original = restoreOrder(links.map(node => node.id), view.items.map(item => item.id));
+        const desired = orderAround(original, selected, targetId, after);
+        if (!desired || sameOrder(original, desired)) return null;
+        const next = { mode: 'manual', ids: desired };
+        await writeOrderRecord(folderId, next);
+
+        let native;
+        let synchronized = false;
+        if (process.env.BROWSER !== 'firefox' && sameOrder(original, links.map(node => node.id))
+          && selected.every(id => !byId.get(id).unmodifiable)) {
+          const priorNative = children.map(node => node.id);
+          let slot = 0;
+          const desiredNative = priorNative.map(id => byId.has(id) ? desired[slot++] : id);
+          const barriers = new Set(children
+            .filter(node => !byId.has(node.id) || node.unmodifiable).map(node => node.id));
+          try {
+            const sync = await applyNativeOrder(folderId, priorNative, desiredNative, selected, barriers);
+            synchronized = sync.synchronized;
+            if (sync.ids && !sameOrder(priorNative, sync.ids)) {
+              native = { before: priorNative, after: sync.ids, selected, barriers };
+            }
+          } catch (error) {
+            console.warn(error);
+          }
+        }
+        return { folderId, previous, next, native, synchronized };
       });
-    });
+      await refresh();
+      if (!result) return false;
+      $customTrigger('updateFolderList', document);
+      const message = result.synchronized
+        ? text('手动顺序已保存并同步到浏览器收藏夹。', 'Manual order saved and reflected in browser favorites.')
+        : text('已保存此文件夹的手动显示顺序。', 'Manual display order saved for this folder.');
+      showOrganizationUndo(message, () => undoOrdering(result.folderId, result.previous, result.next, result.native));
+      return true;
+    } catch (error) {
+      console.warn(error);
+      showOperationFailure();
+      await refresh();
+      return false;
+    }
   }
 
-  /**
-   * Render bookmarks
-   * @param {Array<BookmarkTreeNode>} arr - array of bookmarks
-   * @param {boolean} [hasCreate=false] - show add bookmark button
-   */
-  async function render(arr) {
-    dialLoading.hidden = false;
-    clearContainer();
-
-    // Firefox may contain a separator bookmark type, so we filter it out to avoid rendering it
-    const bookamrksArr = arr.filter(item => item.type !== 'separator' && item.url);
-
-    // bookmarks ids array
-    const bookmarksIds = bookamrksArr.map(child => child.id);
-    let childrenBookmarks;
-
-    // array of indexDB query promises
-    // request for main thumbnails
-    const promiseThumbnailsRequests = [
-      ImageDB.getAllByIds(bookmarksIds)
-    ];
-    // request for thumbnails in folders if the display option is enabled
-    if (settings.$.folder_preview) {
-      // get children bookmarks for folders
-      childrenBookmarks = getChildrenBookmarks(bookamrksArr);
-      // get only ids
-      const childrenIds = childrenBookmarks.map(child => child.id);
-      promiseThumbnailsRequests.push(ImageDB.getAllByIds(childrenIds));
+  async function restoreCommonOrder() {
+    const view = currentPage;
+    if (!view || view.query) return false;
+    try {
+      const next = { mode: 'common' };
+      const previous = await organize(async() => {
+        if (currentPage !== view) return null;
+        const record = await readOrderRecord(view.folderId);
+        if (record?.mode !== 'manual') return null;
+        await writeOrderRecord(view.folderId, next);
+        return record;
+      });
+      if (!previous) return false;
+      await refresh();
+      showOrganizationUndo(text('已恢复常用优先。', 'Most used order restored.'),
+        () => undoOrdering(view.folderId, previous, next));
+      return true;
+    } catch (error) {
+      console.warn(error);
+      showOperationFailure();
+      return false;
     }
+  }
 
-    // request thumbnails from indexDB
-    const [thumbnails, childrenThumbnails] = await Promise.all(promiseThumbnailsRequests);
-
-    // clear local thumbnail map
-    THUMBNAILS_MAP.clear();
-
-    // convert blob to thumbnail url for main bookmarks
-    thumbnails.forEach(thumbnail => {
-      thumbnail.blobUrl = URL.createObjectURL(thumbnail.blob);
-      THUMBNAILS_MAP.set(thumbnail.id, thumbnail);
-    });
-
-    // convert blob to thumbnail url for children bookmarks
-    if (settings.$.folder_preview) {
-      setChildrenThumbnails(childrenThumbnails, childrenBookmarks);
+  function bookmarkFragment(items, thumbnails) {
+    const visible = items.filter(item => !Object.hasOwn(bookmarksToDelete, item.id));
+    const visibleIds = new Set(visible.map(item => item.id));
+    for (const thumbnail of thumbnails) {
+      if (visibleIds.has(thumbnail.id) && thumbnail.blob instanceof Blob) {
+        THUMBNAILS_MAP.set(thumbnail.id, {
+          ...thumbnail,
+          blobUrl: URL.createObjectURL(thumbnail.blob)
+        });
+      }
     }
-
-    if (settings.$.sort_by === 'date') {
-      bookamrksArr.sort((a, b) => b.dateAdded - a.dateAdded);
-    } else if (settings.$.sort_by === 'alphabet') {
-      bookamrksArr.sort((a, b) => a.title.localeCompare(b.title, undefined, {
-        sensitivity: 'base',
-        numeric: true
-      }));
-    }
-
-    // sorting by type folders
-    if (settings.$.bookmarks_sorting_type === 'folders_top') {
-      // folders at the top
-      bookamrksArr.sort((a, b) => Object.hasOwn(b, 'children') - Object.hasOwn(a, 'children'));
-    } else if (settings.$.bookmarks_sorting_type === 'folders_bottom') {
-      // folders at the bottom
-      bookamrksArr.sort((a, b) => Object.hasOwn(a, 'children') - Object.hasOwn(b, 'children'));
-    }
-
     const fragment = document.createDocumentFragment();
+    for (const item of visible) fragment.append(genBookmark(item));
+    return fragment;
+  }
 
-    for (let bookmark of bookamrksArr) {
-      fragment.appendChild(genBookmark(bookmark));
+  function addPageControl(page) {
+    pageObserver?.disconnect();
+    if (!hasMoreBookmarks()) return;
+
+    const button = $createElement('button', {
+      type: 'button', class: 'btn bookmarks-load-more'
+    }, browser.i18n.getMessage('load_more_bookmarks'));
+    button.style.gridColumn = '1 / -1';
+    const load = async() => {
+      if (button.disabled || page.request !== viewRequest) return;
+      button.disabled = true;
+      const items = page.items.slice(page.offset, page.offset + PAGE_SIZE);
+      try {
+        const thumbnails = await ImageDB.getForBookmarks(items).catch(() => []);
+        if (page.request !== viewRequest) return;
+        const fragment = bookmarkFragment(items, thumbnails);
+        const first = fragment.firstElementChild;
+        button.before(fragment);
+        page.offset += items.length;
+        if (document.activeElement === button) first?.focus();
+        if (!hasMoreBookmarks()) {
+          pageObserver?.disconnect();
+          button.remove();
+        }
+      } finally {
+        button.disabled = false;
+      }
+    };
+    button.addEventListener('click', load);
+    container.append(button);
+    if (typeof IntersectionObserver === 'function') {
+      pageObserver = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) load();
+      }, { rootMargin: '160px' });
+      pageObserver.observe(button);
     }
+  }
 
-    container.appendChild(fragment);
+  async function refresh() {
+    if (organizing) return;
+    clearTimeout(searchTimer);
+    const request = ++viewRequest;
+    const requestedId = startFolder();
+    const query = searchQuery;
+    const searching = query.length > 0;
+    dialLoading.hidden = false;
+    container.setAttribute('aria-busy', 'true');
 
-    if (!bookamrksArr.length) {
-      container.innerHTML = `<div class="empty-search">${browser.i18n.getMessage('empty_search')}</div>`;
-    }
+    try {
+      const [folder, matches, usage] = await Promise.all([
+        readFolder(requestedId),
+        searching ? searchBookmarks(query) : Promise.resolve(null),
+        Promise.resolve().then(readUsage).catch(() => ({}))
+      ]);
+      if (!folder) throw new Error('No available bookmarks folder');
+      if (request !== viewRequest) return;
 
-    const hasBack = (window.location.hash !== '')
-      && container.dataset?.parentFolder
-      && settings.$.show_back_column;
+      let visible = (matches ?? folder.children).filter(item => item.type !== 'separator'
+        && item.url && !Object.hasOwn(bookmarksToDelete, item.id));
+      const order = searching ? null : await readOrderRecord(folder.id).catch(() => null);
+      if (request !== viewRequest) return;
+      const sort = order?.mode ?? (settings.$.sort_by || 'common');
+      const count = item => Number(usage?.[item.id]) || 0;
+      if (sort === 'manual') {
+        const byId = new Map(visible.map(item => [item.id, item]));
+        visible = restoreOrder([...byId.keys()], order.ids).map(id => byId.get(id));
+      } else if (sort === 'date') {
+        visible.sort((a, b) => b.dateAdded - a.dateAdded);
+      } else if (sort === 'alphabet') {
+        visible.sort((a, b) => a.title.localeCompare(b.title, undefined, {
+          sensitivity: 'base',
+          numeric: true
+        }));
+      } else {
+        visible.sort((a, b) => count(b) - count(a));
+      }
 
-    if (hasBack) {
-      container.prepend(
-        $createElement('button', {
+      const limit = currentPage?.folderId === folder.id && currentPage.query === query
+        ? Math.max(currentPage.offset, PAGE_SIZE)
+        : PAGE_SIZE;
+      const initialItems = visible.slice(0, limit);
+      const thumbnails = await ImageDB.getForBookmarks(initialItems).catch(() => []);
+      if (request !== viewRequest) return;
+      currentPage = { request, items: visible, offset: initialItems.length, folderId: folder.id, query, order };
+      container.dataset.orderMode = sort;
+      $customTrigger('bookmark-order-mode', container, {
+        detail: { folderId: folder.id, mode: sort },
+        bubbles: true
+      });
+
+      $customTrigger('vb-bookmarks-panel:close', document);
+      if (container.sortInstance?.isDisabled !== searching) {
+        container.sortInstance?.toggleDisable(searching);
+      }
+      for (const thumbnail of THUMBNAILS_MAP.values()) {
+        URL.revokeObjectURL(thumbnail.blobUrl);
+      }
+      THUMBNAILS_MAP.clear();
+      applyFolder(folder, requestedId, searching);
+      document.body.classList.toggle('has-search', searching);
+      const fragment = document.createDocumentFragment();
+      const parentId = container.dataset.parentFolder;
+      if (window.location.hash && parentId && settings.$.show_back_column) {
+        fragment.append($createElement('button', {
           id: 'bookmark-back',
           class: 'bookmark-btn bookmark-btn--back md-ripple',
           'aria-label': browser.i18n.getMessage('parent_folder')
         }, $createElement('span', {
           class: DROPZONE_SELECTOR.replace('.', ''),
-          'data-id': container.dataset?.parentFolder
-        }))
-      );
-    }
-
-    dialLoading.hidden = true;
-  }
-
-  /**
-   * Create speed dial
-   * @param {String} id current folder id
-   * @returns {Promise}
-   */
-  function createSpeedDial(id) {
-    if (settings.$.drag_and_drop) {
-      // if dnd instance exist and disabled(after search) turn it on
-      if (container.sortInstance?.isDisabled) {
-        container.sortInstance?.toggleDisable(false);
+          'data-id': parentId
+        })));
+      }
+      const cards = bookmarkFragment(initialItems, thumbnails);
+      if (cards.childElementCount) fragment.append(cards);
+      else {
+        fragment.append($createElement('div', { class: 'empty-search' }, browser.i18n.getMessage('empty_search')));
+      }
+      container.replaceChildren(fragment);
+      addPageControl(currentPage);
+    } catch (error) {
+      if (request !== viewRequest) return;
+      console.warn(error);
+      pageObserver?.disconnect();
+      currentPage = null;
+      $customTrigger('vb-bookmarks-panel:close', document);
+      container.replaceChildren($createElement('div', { class: 'not-found' },
+        $createElement('p', { class: 'not-found__text' }, browser.i18n.getMessage('not_found_text'))));
+    } finally {
+      if (request === viewRequest) {
+        dialLoading.hidden = true;
+        container.removeAttribute('aria-busy');
       }
     }
+  }
 
-    return getSubTree(id)
-      .then(item => {
-        if (!item[0].children) {
-          throw new Error('not_folder');
-        }
-
-        // folder by id exists
-        container.setAttribute('data-folder', id);
-        if (item[0].parentId && !ROOT_FOLDERS.includes(item[0].parentId)) {
-          container.setAttribute('data-parent-folder', item[0].parentId);
-        } else {
-          container.removeAttribute('data-parent-folder');
-        }
-
-        return render(item[0].children, settings.$.show_create_column);
-      })
-      .catch(() => {
-        Toast.show(browser.i18n.getMessage('notice_cant_find_id'));
-        container.innerHTML = /* html */
-            `<div class="not-found">
-              <div class="not-found__wrap">
-                <div class="not-found__icon"></div>
-                <div class="not-found__text">
-                  ${browser.i18n.getMessage('not_found_text')}
-                </div>
-                <a class="btn md-ripple" href="#1">${browser.i18n.getMessage('not_found_link_text')}</a>
-              </div>
-            </div>`;
-      });
+  function refreshFromNative() {
+    clearTimeout(nativeRefreshTimer);
+    if (container.classList.contains('has-dragging')) {
+      nativeRefreshTimer = setTimeout(refreshFromNative, 80);
+      return;
+    }
+    refresh();
   }
 
   /**
@@ -590,7 +690,7 @@ const Bookmarks = (() => {
    * @return {Promise<boolean>} A promise that resolves to a boolean indicating whether the user has permission to access all URLs.
    */
   async function checkHostPermissions() {
-    const allUrlsPermission = await requestPermissions({ origins: ['<all_urls>'] });
+    const allUrlsPermission = await requestPermissions({ origins: ['<all_urls>'] }).catch(() => false);
     if (!allUrlsPermission) {
       const message = browser.i18n.getMessage('notice_host_permissions')
         + `<br><br><button class="btn btn--primary md-ripple" data-permissions-info>${browser.i18n.getMessage('learn_more')}</button>`;
@@ -603,144 +703,166 @@ const Bookmarks = (() => {
     return allUrlsPermission;
   }
 
-  async function captureMultipleBookmarks(selectedBookmarks, showNotice) {
-    const bookmarksLength = selectedBookmarks.filter(b => !b.isFolder).length;
-    // create notification toast
-    const progressToast = renderProgressToast(bookmarksLength);
-    document.body.append(progressToast);
-    const progressToastTween = progressToast.animate([
-      { transform: 'translate3D(-100%, 0, 0)' },
-      { transform: 'translate3D(0, 0, 0)' }
-    ], {
-      duration: 200,
-      easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
-      fill: 'forwards'
-    });
-    const progressText = document.getElementById('progress-text');
+  function showOperationFailure() {
+    const message = browser.i18n.getMessage('notice_bookmark_operation_failed');
+    Toast.show(message || 'The bookmark operation could not be completed.');
+  }
+
+  async function captureMultipleBookmarks(bookmarks) {
+    if (isGeneratedThumbs) return;
+    const candidates = new Map();
+    for (const { id, url } of bookmarks) {
+      if (/^https?:\/\//i.test(url || '')) candidates.set(id, { id, url });
+    }
+    if (!candidates.size) return;
 
     isGeneratedThumbs = true;
     $customTrigger('thumbnails:updating', container);
-
-    for (const [index, b] of selectedBookmarks.entries()) {
-      // updating toast progress
-      progressText.textContent = index + 1;
-      // get capture
-      const response = await captureScreen(b.url, b.id);
-      if (response.warning) continue;
-
-      const image = await ImageDB.get(b.id);
-      const blobUrl = URL.createObjectURL(image.blob);
-      const thumbnail = THUMBNAILS_MAP.get(b.id);
-
-      if (thumbnail) {
-        URL.revokeObjectURL(thumbnail.blobUrl);
+    let progressToast;
+    let failed = false;
+    try {
+      const protectedImages = await ImageDB.getForBookmarks([...candidates.values()]);
+      for (const image of protectedImages) {
+        if (image.custom) candidates.delete(image.id);
       }
-      THUMBNAILS_MAP.set(b.id, {
-        ...image,
-        blobUrl
-      });
+      if (!candidates.size) return;
 
-      try {
-        // if we can, then update the bookmark in the DOM
-        const bookmark = document.getElementById(`vb-${b.id}`);
-        bookmark.image = blobUrl;
-      } catch (err) {}
+      progressToast = renderProgressToast(candidates.size);
+      document.body.append(progressToast);
+      const progressText = progressToast.querySelector('#progress-text');
+      let index = 0;
+      for (const bookmark of candidates.values()) {
+        if (progressText) progressText.textContent = ++index;
+        const success = await captureScreen(bookmark.url, bookmark.id);
+        if (!success) failed = true;
+      }
+    } catch (error) {
+      failed = true;
+      console.warn(error);
+    } finally {
+      progressToast?.remove();
+      isGeneratedThumbs = false;
+      $customTrigger('thumbnails:updated', container);
+      if (failed) {
+        Toast.show(browser.i18n.getMessage('notice_screenshot_failed') || 'Some screenshots could not be saved.');
+      }
+      refresh();
     }
-
-    isGeneratedThumbs = false;
-
-    if (showNotice) {
-      $notifications(browser.i18n.getMessage('notice_thumbnails_update_complete'));
-    }
-
-    $customTrigger('thumbnails:updated', container);
-    progressToastTween.reverse();
-    progressToastTween.onfinish = () => {
-      progressToast.remove();
-    };
   }
 
-  function autoUpdateThumb() {
+  async function autoUpdateThumb() {
     if (isGeneratedThumbs) return;
-    const id = startFolder();
-    getSubTree(id)
-      .then((items) => {
-        // check recursively or not
-        const children = settings.$.thumbnails_update_recursive
-          // create a flat array of nested bookmarks
-          ? flattenArrayBookmarks(items[0].children)
-          // only first level bookmarks without folders
-          : items[0].children.filter(item => item.url);
-
-        // sort by newest
-        if (settings.$.sort_by_newest) {
-          children.sort((a, b) => b.dateAdded - a.dateAdded);
-        }
-
-        captureMultipleBookmarks(children);
-      });
+    try {
+      const folder = await readFolder(startFolder());
+      if (!folder) return;
+      const bookmarks = settings.$.thumbnails_update_recursive
+        ? flattenArrayBookmarks(folder.children)
+        : folder.children;
+      await captureMultipleBookmarks(bookmarks);
+    } catch (error) {
+      console.warn(error);
+      showOperationFailure();
+    }
   }
 
   async function updateSelectedThumbnails(selectedBookmarks) {
-    const bookmarks = [];
-
-    for (let b of selectedBookmarks) {
-      if (!b.isFolder) {
-        bookmarks.push(b);
-      } else {
-        const three = await getSubTree(b.id);
-        if (settings.$.thumbnails_update_recursive) {
-          bookmarks.push(...flattenArrayBookmarks(three));
-        } else {
-          const bookmarksThree = three[0].children.filter(child => child.url);
-          bookmarks.push(...bookmarksThree);
-        }
-      }
-    }
-
-    captureMultipleBookmarks(bookmarks);
+    await captureMultipleBookmarks(selectedBookmarks);
   }
 
-  async function moveSelectedBookmarks(selectedBookmarks, destinationId) {
-    // checking if the destination is contained within the selected folder
-    const isDestinationChild = (bookmarks) => {
-      return bookmarks.some(bookmark => {
-        if (bookmark.children) {
-          return bookmark.id === destinationId ? true : isDestinationChild(bookmark.children);
-        }
-        return false;
-      });
-    };
-
-    // if the destination is contained within the selected folder
-    // we must not move the selected folder
-    // parent folder cannot be placed in child folder
-    // remove this folder from the array selected bookmarks
-    // but first we make a shallow copy of the array so as not to mutate the original
-    const cloneSelectedBookmarks = [...selectedBookmarks];
-
-    for (let i = 0; i < cloneSelectedBookmarks.length; i++) {
-      const bookmark = cloneSelectedBookmarks[i];
-      if (bookmark.isFolder) {
-        const subTree = await getSubTree(bookmark.id);
-        if (isDestinationChild(subTree)) {
-          cloneSelectedBookmarks.splice(i, 1);
-          break;
+  async function undoMove(entries, destinationId) {
+    const restored = await organize(async() => {
+      let count = 0;
+      const ordered = [...entries].sort((a, b) => a.parentId.localeCompare(b.parentId) || a.index - b.index);
+      for (const entry of ordered) {
+        try {
+          const [node] = await get(entry.id);
+          if (node.parentId !== destinationId) continue;
+          const children = await getChildren(entry.parentId);
+          const positions = new Map(children.map((child, index) => [child.id, index]));
+          const after = entry.siblings.slice(entry.index + 1).find(id => positions.has(id));
+          const before = entry.siblings.slice(0, entry.index).reverse().find(id => positions.has(id));
+          const index = after !== undefined ? positions.get(after)
+            : before !== undefined ? positions.get(before) + 1 : Math.min(entry.index, children.length);
+          await move(entry.id, { parentId: entry.parentId, index });
+          count++;
+        } catch (error) {
+          console.warn(error);
         }
       }
-    }
-
-    const promises = cloneSelectedBookmarks.map(bookmark => {
-      return move(bookmark.id, {
-        parentId: destinationId,
-        ...(settings.$.move_to_start && { index: 0 })
-      })
-        .then(() => {
-          $customTrigger('updateFolderList', document);
-          bookmark.remove();
-        });
+      return count;
     });
-    return Promise.all(promises);
+    $customTrigger('updateFolderList', document);
+    await refresh();
+    if (restored === entries.length) {
+      Toast.show(text('已撤销移动。', 'Move undone.'));
+    } else {
+      Toast.show(text('只能撤销 ' + restored + ' 项，其他书签已发生变化。',
+        'Restored ' + restored + ' items. Other bookmarks changed elsewhere.'));
+    }
+  }
+
+  async function moveBookmarks(ids, destinationId) {
+    if (!destinationId || !ids.length) return false;
+    try {
+      const requested = [...new Set(ids)];
+      const result = await organize(async() => {
+        const [destination] = await get(destinationId);
+        if (!destination || destination.url || destination.unmodifiable || ROOT_FOLDERS.includes(destination.id)
+          || Object.hasOwn(bookmarksToDelete, destinationId)) return null;
+
+        const moved = [];
+        const sourceFolders = new Map();
+        let failed = 0;
+        for (const id of requested) {
+          try {
+            const [node] = await get(id);
+            if (node.parentId === destinationId) continue;
+            if (!node.url || node.unmodifiable || Object.hasOwn(bookmarksToDelete, node.id)) {
+              failed++;
+              continue;
+            }
+            if (!sourceFolders.has(node.parentId)) {
+              sourceFolders.set(node.parentId, (await getChildren(node.parentId)).map(child => child.id));
+            }
+            const siblings = sourceFolders.get(node.parentId);
+            const index = siblings.indexOf(id);
+            if (index < 0) {
+              failed++;
+              continue;
+            }
+            await move(id, {
+              parentId: destinationId,
+              ...(settings.$.move_to_start && { index: moved.length })
+            });
+            moved.push({ id, parentId: node.parentId, index, siblings });
+          } catch (error) {
+            failed++;
+            console.warn(error);
+          }
+        }
+        return { moved, failed };
+      });
+      if (!result?.moved.length) {
+        if (!result || result.failed) showOperationFailure();
+        return false;
+      }
+      $customTrigger('updateFolderList', document);
+      await refresh();
+      const { moved, failed } = result;
+      const zh = '已移动 ' + moved.length + ' 项书签' + (failed ? '，' + failed + ' 项未能移动。' : '。');
+      const en = 'Moved ' + moved.length + ' bookmarks' + (failed ? '. ' + failed + ' could not be moved.' : '.');
+      showOrganizationUndo(text(zh, en), () => undoMove(moved, destinationId));
+      return true;
+    } catch (error) {
+      console.warn(error);
+      showOperationFailure();
+      await refresh();
+      return false;
+    }
+  }
+
+  function moveSelectedBookmarks(selectedBookmarks, destinationId) {
+    return moveBookmarks(selectedBookmarks.map(bookmark => bookmark.id), destinationId);
   }
 
   /**
@@ -752,145 +874,69 @@ const Bookmarks = (() => {
    */
   async function uploadScreen(bookmark, fileBlob) {
     bookmark.hasOverlay = true;
-
-    const { id } = bookmark;
-    const blob = await $resizeThumbnail(fileBlob);
-    const blobUrl = URL.createObjectURL(blob);
-    const thumbnail = THUMBNAILS_MAP.get(id);
-
-    ImageDB.update({ id, blob, custom: true });
-
-    if (thumbnail) {
-      URL.revokeObjectURL(thumbnail.blobUrl);
+    try {
+      const { id } = bookmark;
+      const blob = await $resizeThumbnail(fileBlob);
+      const saved = await ImageDB.update({ id, blob, custom: true });
+      if (saved === undefined) throw new Error('Could not save custom image');
+      Toast.show(browser.i18n.getMessage('notice_thumb_image_updated'));
+      await refresh();
+    } catch (error) {
+      console.warn(error);
+      showOperationFailure();
+    } finally {
+      bookmark.hasOverlay = false;
     }
-
-    THUMBNAILS_MAP.set(id, {
-      id,
-      blob,
-      blobUrl,
-      custom: true,
-      ...(thumbnail?.children && { children: thumbnail.children })
-    });
-
-    bookmark.isCustomImage = true;
-    bookmark.image = blobUrl;
-    bookmark.hasOverlay = false;
-
-    Toast.show(browser.i18n.getMessage('notice_thumb_image_updated'));
   }
 
   function captureScreen(captureUrl, id) {
-    return new Promise((resolve) => {
-      browser.runtime.sendMessage({
-        capture: {
-          id,
-          captureUrl
-        }
-      }, (response) => {
-        if (response.warning) {
-          console.warn(response.warning);
-        }
-        resolve(response);
-      });
+    return new Promise(resolve => {
+      const timeout = setTimeout(() => resolve(false), 40000);
+      const finish = success => {
+        clearTimeout(timeout);
+        resolve(success);
+      };
+      try {
+        browser.runtime.sendMessage({ capture: { id, captureUrl } }, response => {
+          if (browser.runtime.lastError) return finish(false);
+          finish(response === 'success' || response?.ok === true);
+        });
+      } catch {
+        finish(false);
+      }
     });
   }
 
-  async function captureByTurn() {
-    const bookmark = THUMBNAILS_CREATION_QUEUE[0];
-    const response = await captureScreen(bookmark.url, bookmark.id, bookmark.parentId);
-
-    if (!response.warning) {
-      const image = await ImageDB.get(bookmark.id);
-      const thumbnail = THUMBNAILS_MAP.get(bookmark.id);
-
-      if (thumbnail) {
-        // если миниатюра объекта существует удалить его из памяти
-        URL.revokeObjectURL(thumbnail.blobUrl);
-      }
-
-      bookmark.isCustomImage = false;
-      bookmark.image = URL.createObjectURL(image.blob);
-
-      // write to the thumbnails map on the page a new blobUrl
-      THUMBNAILS_MAP.set(bookmark.id, {
-        ...image,
-        blobUrl: bookmark.image
-      });
+  async function createScreen(bookmark) {
+    if (bookmark?.isConnected && await checkHostPermissions()) {
+      await captureMultipleBookmarks([bookmark]);
     }
-
-    bookmark.hasOverlay = false;
-    THUMBNAILS_CREATION_QUEUE.shift();
-
-    if (THUMBNAILS_CREATION_QUEUE.length) {
-      await captureByTurn();
-    }
-  }
-
-  async function createScreen(bookmark, access = false) {
-    // Firefox is terrible 💩💩💩
-    // because of firefox i have to duplicate this check at a top level functions(from newtab.js)
-    // I am forced to use trycatch because of firefox
-    let hostPermissions = access;
-    try {
-      hostPermissions = await checkHostPermissions();
-    } catch (err) {}
-
-    if (!hostPermissions) return;
-
-    // permissions.request may only be called from a user input handler firefox can't catch a function in the trace via promises)
-    // if (!(await checkHostPermissions())) {
-    //   return;
-    // }
-
-    if (!bookmark) return;
-
-    bookmark.hasOverlay = true;
-    THUMBNAILS_CREATION_QUEUE.push(bookmark);
-
-    if (THUMBNAILS_CREATION_QUEUE.length === 1) {
-      captureByTurn();
-    }
-  }
-
-  /**
-   * Search bookmarks
-   * @param {String} query
-   */
-  function  search(query) {
-    searchBookmarks(query)
-      .then(match => {
-        if (match.length > 0) {
-          if (settings.$.drag_and_drop) {
-            // if dnd we turn off sorting and destroy nested instances
-            container.sortInstance?.toggleDisable(true);
-          }
-          render(match);
-        } else {
-          container.innerHTML = `<div class="empty-search">🙁 ${browser.i18n.getMessage('empty_search')}</div>`;
-        }
-      });
   }
 
   async function removeFromBrowser(bookmark, isFolder) {
-    const id = isFolder
-      ? bookmark.id
-      : bookmark.dataset.id;
-
-    removeThumbnail(id, isFolder);
-
+    const id = bookmark.dataset.id;
     await (isFolder ? removeTree(id) : remove(id));
-
-    bookmark.remove();
-
     $customTrigger('updateFolderList', document);
+    await refresh();
   }
 
-  function showRemoveBookmarkToast({
-    message,
-    onShow,
-    onUndo,
-    onClose
-  }) {
+  function queueBookmarkDeletion(bookmarks, message) {
+    const pending = new Map();
+    for (const { id, isFolder, element } of bookmarks) {
+      if (!id || !element.isConnected || Object.hasOwn(bookmarksToDelete, id)) continue;
+      const entry = { id, isFolder };
+      pending.set(id, entry);
+      bookmarksToDelete[id] = entry;
+      element.hidden = true;
+    }
+    if (!pending.size) return false;
+
+    const forget = () => {
+      for (const [id, entry] of pending) {
+        if (bookmarksToDelete[id] === entry) delete bookmarksToDelete[id];
+      }
+    };
+    let undone = false;
     Toast.show({
       message,
       delay: 8000,
@@ -899,185 +945,92 @@ const Bookmarks = (() => {
       action: {
         html: browser.i18n.getMessage('undo'),
         class: ['btn', 'btn--clear', 'md-ripple'],
-        callback(e, hideToast) {
-          onUndo();
+        callback(event, hideToast) {
+          undone = true;
+          forget();
+          refresh();
           hideToast();
         }
       },
-      onShow,
-      onClose
+      async onClose() {
+        if (undone) return;
+        try {
+          const results = await Promise.allSettled([...pending.values()].map(async({ id, isFolder }) => {
+            await (isFolder ? removeTree(id) : remove(id));
+          }));
+          if (results.some(result => result.status === 'rejected')) showOperationFailure();
+        } finally {
+          forget();
+          $customTrigger('updateFolderList', document);
+          refresh();
+        }
+      }
     });
+    return true;
   }
 
   async function removeMultipleBookmarks(selectedBookmarks) {
     if (!settings.$.without_confirmation) {
-      const confirmAction = await confirmPopup(browser.i18n.getMessage('confirm_delete_selected_bookmarks'));
-      if (!confirmAction) return false;
+      const confirmed = await confirmPopup(browser.i18n.getMessage('confirm_delete_selected_bookmarks'));
+      if (!confirmed) return false;
     }
 
-    const toggleViewBookmarks = (hidden = false) => {
-      selectedBookmarks.forEach(bookmark => {
-        bookmark.hidden = hidden;
-      });
-    };
-    const clearBoorkmarksToDelete = () => {
-      selectedBookmarks.forEach(bookmark => {
-        delete bookmarksToDelete[bookmark.id];
-      });
-    };
-
-    selectedBookmarks.forEach(bookmark => {
-      bookmarksToDelete[bookmark.id] = {
-        id: bookmark.id,
-        image: bookmark.image,
-        isFolder: bookmark.isFolder
-      };
-    });
-
-    let isHidden = true;
-    toggleViewBookmarks(isHidden);
-
-    return new Promise(resolve => {
-      showRemoveBookmarkToast({
-        message: browser.i18n.getMessage('notice_selected_bookmarks_removed'),
-        onShow() {
-        // When showing the toast, we need to notify that the toast has appeared so the initiator can clean up after itself.
-        // This isn't a very reliable method because there’s no guarantee everything will be properly removed.
-        // However, it’s important for us to hide the action panel;
-        // otherwise, while the toast with the timer is visible, the user can still interact with the action panel, which could lead to unwanted issues.
-          resolve(true);
-        },
-        onUndo() {
-          isHidden = false;
-          toggleViewBookmarks(false);
-          clearBoorkmarksToDelete();
-        },
-        async onClose() {
-          if (isHidden) {
-            clearBoorkmarksToDelete();
-
-            await Promise.all(selectedBookmarks.map(async(bookmark) => {
-              const { id, isFolder } = bookmark;
-              removeThumbnail(id, isFolder);
-              await (isFolder ? removeTree(id) : remove(id));
-              bookmark.remove();
-            }));
-
-            $customTrigger('updateFolderList', document);
-          }
-        }
-      });
-    });
+    return queueBookmarkDeletion(selectedBookmarks.map(element => ({
+      id: element.id,
+      isFolder: element.isFolder,
+      element
+    })), browser.i18n.getMessage('notice_selected_bookmarks_removed'));
   }
 
   async function removeBookmark(bookmark, isFolder = false, skipConfirmation = false) {
     if (!skipConfirmation && !settings.$.without_confirmation) {
-      const confirmMessage = isFolder
-        ? browser.i18n.getMessage('confirm_delete_folder')
-        : browser.i18n.getMessage('confirm_delete_bookmark');
-
-      const confirmAction = await confirmPopup(confirmMessage);
-      if (!confirmAction) return;
+      const confirmMessage = isFolder ? 'confirm_delete_folder' : 'confirm_delete_bookmark';
+      if (!await confirmPopup(browser.i18n.getMessage(confirmMessage))) return;
     }
 
-    const id = bookmark.dataset.id;
-    const message = isFolder
-      ? browser.i18n.getMessage('notice_folder_removed', bookmark.title)
-      : browser.i18n.getMessage('notice_bookmark_removed', bookmark.title);
-
-    bookmark.hidden = true;
-    bookmarksToDelete[bookmark.id] = {
-      id: bookmark.id,
-      image: bookmark.image,
-      isFolder: bookmark.isFolder
-    };
-
-    showRemoveBookmarkToast({
-      message,
-      onUndo() {
-        delete bookmarksToDelete[id];
-        bookmark.hidden = false;
-      },
-      onClose() {
-        if (bookmark.hidden) {
-          delete bookmarksToDelete[id];
-          removeThumbnail(bookmark.id, isFolder);
-          (isFolder ? removeTree : remove)(id)
-            .then(() => {
-              bookmark.remove();
-              $customTrigger('updateFolderList', document);
-            });
-        }
-      }
-    });
+    const messageKey = isFolder ? 'notice_folder_removed' : 'notice_bookmark_removed';
+    const message = browser.i18n.getMessage(messageKey, $escapeHtml(bookmark.title));
+    queueBookmarkDeletion([{ id: bookmark.dataset.id, isFolder, element: bookmark }], message);
   }
 
-  async function removeThumbnail(id, isFolder = false) {
-    const ids = [id];
-
-    if (isFolder) {
-      const subTree = await getSubTree(id);
-      const nestedBookmarksIds = flattenArrayBookmarks(subTree[0].children, true).map(({ id }) => id);
-      ids.push(...nestedBookmarksIds);
+  async function removeThumbnail(id, previewUrl) {
+    try {
+      await ImageDB.delete(id);
+      if (previewUrl) await ImageDB.deleteVisitPreview(previewUrl);
+      await refresh();
+    } catch (error) {
+      console.warn(error);
+      showOperationFailure();
     }
-
-    const thumbnail = THUMBNAILS_MAP.get(id);
-    if (thumbnail) {
-      URL.revokeObjectURL(thumbnail.blobUrl);
-    }
-    THUMBNAILS_MAP.delete(id);
-
-    return Promise.all(
-      ids.map(id => ImageDB.delete(id))
-    );
   }
 
-  function createBookmark(title, url) {
-    const parentId = container.getAttribute('data-folder');
-
-    return create({ title, ...(url && { url }), parentId })
-      .then(result => {
-        if (result.url) {
-          const bookmark = genBookmark(result);
-          container.append(bookmark);
-          $customTrigger('updateFolderList', document);
-          return bookmark;
-        }
-
-        $customTrigger('updateFolderList', document);
-        return result;
-      });
+  async function createBookmark(title, url) {
+    const folder = await readFolder(startFolder());
+    if (!folder || folder.unmodifiable) throw new Error('No writable bookmark folder');
+    const result = await create({ title, ...(url && { url }), parentId: folder.id });
+    $customTrigger('updateFolderList', document);
+    await refresh();
+    return result;
   }
 
   async function updateBookmark(id, title, url, moveId) {
-    const bookmark = document.getElementById(`vb-${id}`);
-
     const result = await update(id, { title, ...(url && { url }) });
-
-    // if the bookmark is moved to another folder
-    if (moveId !== id && moveId !== result.parentId) {
-      const destination = {
+    if (moveId && moveId !== id && moveId !== result.parentId) {
+      await move(id, {
         parentId: moveId,
         ...(settings.$.move_to_start && { index: 0 })
-      };
-      move(id, destination)
-        .then(() => {
-          $customTrigger('updateFolderList', document);
-          bookmark.remove();
-        });
-    } else {
-      // else update bookmark view
-      bookmark.title = result.title;
-      bookmark.url = result.url ? result.url : `#${result.id}`;
-      $customTrigger('updateFolderList', document);
+      });
     }
+    $customTrigger('updateFolderList', document);
+    await refresh();
     Toast.show(browser.i18n.getMessage('notice_bookmark_updated'));
-    return bookmark;
+    return result;
   }
 
   return {
     init,
-    refresh: () => createSpeedDial(startFolder()),
+    refresh,
+    refreshFromNative,
     createBookmark,
     updateBookmark,
     removeFromBrowser,
@@ -1089,6 +1042,10 @@ const Bookmarks = (() => {
     autoUpdateThumb,
     updateSelectedThumbnails,
     moveSelectedBookmarks,
+    moveBookmarks,
+    canReorder,
+    reorderBookmarks,
+    restoreCommonOrder,
     checkHostPermissions
   };
 })();

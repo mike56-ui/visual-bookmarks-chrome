@@ -1,4 +1,7 @@
 {
+  "load_more_bookmarks": {
+    "message": "顯示更多書籤"
+  },
   "ext_name": {
     "message": "視覺書籤"
   },

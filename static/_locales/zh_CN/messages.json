@@ -1,4 +1,7 @@
 {
+  "load_more_bookmarks": {
+    "message": "显示更多书签"
+  },
   "ext_name": {
     "message": "缩略图书签"
   },

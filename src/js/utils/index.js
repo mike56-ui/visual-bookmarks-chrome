@@ -1,4 +1,5 @@
 import { FIREFOX_BROWSER } from '../constants';
+import { loadSiteIcon } from '../components/siteIconLoader';
 
 /**
  * Creates a new DOM element with the specified tag, attributes, and children.
@@ -290,46 +291,27 @@ export async function $filePicker(pickerOpts = {
 }
 
 export function faviconURL(url, size = 16) {
-  // Only send the origin, never bookmark paths, query strings or credentials.
   try {
-    const parsed = new URL(url);
-    if (!/^https?:$/.test(parsed.protocol)) return browser.runtime.getURL('img/protocol.svg');
-    return `https://www.google.com/s2/favicons?sz=${size}&domain_url=${encodeURIComponent(parsed.origin)}`;
+    const page = new URL(url);
+    if (!['http:', 'https:'].includes(page.protocol)) return browser.runtime.getURL('img/protocol.svg');
+    if (process.env.BROWSER === 'firefox') return new URL('/favicon.ico', page.origin).href;
+    const icon = new URL(browser.runtime.getURL('_favicon/'));
+    icon.searchParams.set('pageUrl', page.href);
+    icon.searchParams.set('size', String(size));
+    return icon.href;
   } catch {
     return browser.runtime.getURL('img/protocol.svg');
   }
 }
 
-/** A consistent icon frame, with a readable fallback and no bitmap upscaling. */
 export function createSiteIcon(url, { size = 36, source } = {}) {
-  let label = '?';
-  try {
-    label = new URL(url).hostname.replace(/^www\./, '').charAt(0).toUpperCase() || '?';
-  } catch {}
   const frame = $createElement('span', { class: 'site-icon', 'aria-hidden': 'true' });
-  const fallback = $createElement('span', { class: 'site-icon__fallback' }, label);
   const image = $createElement('img', {
     class: 'site-icon__image', alt: '', loading: 'lazy', decoding: 'async', draggable: 'false',
     referrerpolicy: 'no-referrer'
   });
-  image.addEventListener('load', () => {
-    const scale = Math.min(1, size / image.naturalWidth, size / image.naturalHeight);
-    const width = Math.round(image.naturalWidth * scale);
-    const height = Math.round(image.naturalHeight * scale);
-    // Prefer a sharp monogram to stretching a tiny favicon over a large card.
-    if (Math.min(width, height) < Math.min(size, 24)) return;
-    image.style.width = `${width}px`;
-    image.style.height = `${height}px`;
-    image.classList.add('is-loaded');
-    fallback.hidden = true;
-    image.hidden = false;
-  });
-  image.addEventListener('error', () => {
-    fallback.hidden = false;
-    image.hidden = true;
-  });
-  image.src = source || faviconURL(url, size > 24 ? 128 : 64);
-  frame.append(fallback, image);
+  loadSiteIcon(image, url, source || faviconURL(url, size > 24 ? 32 : 16), size);
+  frame.append(image);
   return frame;
 }
 

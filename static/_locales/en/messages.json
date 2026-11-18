@@ -1,4 +1,7 @@
 {
+  "load_more_bookmarks": {
+    "message": "Show more bookmarks"
+  },
   "ext_name": {
     "message": "Visual bookmarks"
   },

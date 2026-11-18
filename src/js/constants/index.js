@@ -1,4 +1,3 @@
-export const FAVICON_GOOGLE = 'https://www.google.com/s2/favicons?sz=32&amp;domain_url=';
 
 export const SVG_LOADER =
 `<svg class="loading" id="loading" viewBox="0 0 100 100">` +
@@ -67,6 +66,11 @@ export const CONTEXT_MENU = [
     action: 'edit',
     title: browser.i18n.getMessage('contextmenu_edit'),
     icon: '<svg height="24" width="24" fill="currentColor"><use xlink:href="/img/symbol.svg#edit_outline"/></svg>'
+  },
+  {
+    action: 'move',
+    title: browser.i18n.getMessage('button_action_move'),
+    isBookmark: true
   },
   {
     action: 'capture',

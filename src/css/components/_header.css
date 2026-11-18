@@ -263,8 +263,8 @@
 }
 
 body[data-folder-dock] .header {
-  max-width: 820px;
-  margin: 12px auto 0;
+  width: 100%;
+  margin: 0;
   padding: 0;
 }
 
@@ -274,27 +274,28 @@ body[data-folder-dock] .back {
 }
 
 body[data-folder-dock] .search-wrap {
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: 24px;
-  background: rgb(18 22 42 / 36%);
-  box-shadow: 0 12px 34px rgb(0 0 0 / 16%);
-  backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--line-subtle);
+  border-radius: 22px;
+  background: var(--control-surface);
+  box-shadow: 0 1px 4px rgb(32 48 77 / 5%);
   overflow: visible;
 }
 
+body[data-folder-dock] .search-wrap:focus-within { border-color: var(--focus-color); }
+
 body[data-folder-dock] .header .form-control,
 body[data-folder-dock] .header .form-control:not(:focus) {
-  height: 48px;
+  height: 42px;
   border: 0;
   border-radius: 24px;
-  color: rgb(255 255 255 / 90%);
+  color: var(--text-main);
   background: transparent;
   box-shadow: none;
 }
 
 body[data-folder-dock] .header .form-control::placeholder,
 body[data-folder-dock] .header .form-control:not(:focus)::placeholder {
-  color: rgb(255 255 255 / 62%);
+  color: var(--text-secondary);
 }
 
 body[data-folder-dock] .header__engine {
@@ -302,11 +303,10 @@ body[data-folder-dock] .header__engine {
   bottom: 4px;
 }
 
-body[data-folder-dock] .header__engine-button,
-body[data-folder-dock] .has-image .header__engine-button {
-  border-radius: 20px;
-  color: #fff;
-  background: rgb(255 255 255 / 10%);
+body[data-folder-dock] .header__engine-button {
+  border-radius: 18px;
+  color: var(--text-secondary);
+  background: transparent;
 }
 
 body[data-folder-dock] .search-actions {
@@ -318,16 +318,90 @@ body[data-folder-dock] .search-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: rgb(255 255 255 / 72%);
+  color: var(--text-secondary);
   text-decoration: none;
 }
 
 body[data-folder-dock] .search-button:hover {
-  color: #fff;
+  color: var(--text-main);
 }
 
-.search-settings-link {
-  border-radius: 50%;
+body[data-folder-dock] .search-actions [hidden] { display: none; }
+
+.newtab-toolbar {
+  position: relative;
+  z-index: 1012;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 16px auto 0;
+}
+
+.newtab-toolbar > header { min-width: 0; flex: 1; }
+.newtab-toolbar [hidden] { display: none; }
+.newtab-toolbar__button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 1px solid var(--line-subtle);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  background: var(--control-surface);
+  font: 650 21px/1 var(--font-family);
+  cursor: pointer;
+}
+
+.newtab-toolbar__button svg { fill: currentcolor; }
+.newtab-toolbar__button:hover,
+.newtab-toolbar__button[aria-expanded="true"] { background: var(--surface-active); }
+.newtab-toolbar__button:focus-visible,
+.newtab-actions__list :focus-visible { outline: 2px solid var(--focus-color); outline-offset: -2px; }
+
+.newtab-actions { position: relative; }
+.newtab-actions__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 32px));
+  padding: 5px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 13px;
+  background: var(--control-surface);
+  box-shadow: var(--panel-shadow);
+}
+
+.newtab-actions__list > * {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-main);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.newtab-actions__list > :hover,
+.newtab-actions__list > :focus-within { background: var(--surface-hover); }
+.newtab-actions__option input { accent-color: var(--focus-color); }
+
+@media (max-width: 460px) {
+  .newtab-toolbar { gap: 5px; }
+  .newtab-toolbar__button { width: 36px; }
+  .header input { padding-left: 40px; padding-right: 37px; }
+  body[data-folder-dock] .header__engine-button { width: 31px; }
 }
 
 .header .form-control {

@@ -145,6 +145,10 @@
 
 /* stylelint-disable-next-line at-rule-no-unknown */
 @starting-style {
+  .toast-container .toast:has(.toast__action) {
+    opacity: 0;
+    transform: none;
+  }
   .toast-container--top .toast,
   .toast-container--top-left .toast,
   .toast-container--top-right .toast {

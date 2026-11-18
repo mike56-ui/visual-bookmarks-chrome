@@ -1,0 +1,100 @@
+/* Keep measurements in each list's coordinate space while cards are translated. */
+#bookmarks,
+#folderDockList {
+  position: relative;
+}
+
+.motion-drag-active {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.motion-drag-active :is(.bookmark, .folder-card, .folder-card__open) {
+  cursor: grabbing;
+}
+
+.motion-drag-lift,
+.motion-drag-slot {
+  position: fixed;
+  top: 0;
+  left: 0;
+  margin: 0;
+  pointer-events: none;
+}
+
+.motion-drag-slot {
+  z-index: 1014;
+  border: 1px dashed color-mix(in srgb, var(--focus-color) 47%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-active) 65%, transparent);
+}
+
+.motion-drag-slot[hidden] { display: none; }
+
+.motion-drag-lift {
+  z-index: 1016;
+  will-change: transform;
+  transform-origin: top left;
+}
+
+.motion-drag-lift > .motion-drag-surface {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  color: var(--text-main);
+}
+
+.motion-drag-lift > .folder-card.motion-drag-surface {
+  height: 100%;
+  border-color: var(--focus-color);
+  box-shadow: var(--panel-shadow);
+}
+
+.motion-drag-lift .bookmark__stage {
+  border-color: var(--focus-color);
+  box-shadow: var(--panel-shadow);
+}
+
+.motion-drag-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 2;
+  min-width: 25px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #fff;
+  background: #316cb1;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: center;
+}
+
+.motion-drag-active :is(#bookmarks, #folderDockList) .motion-drag-held,
+.motion-drag-arriving {
+  visibility: hidden;
+}
+
+.motion-drag-active :is(#bookmarks, #folderDockList) :is(.bookmark, .folder-card) {
+  transform: none;
+  transition: none;
+}
+
+.motion-drag-active :is(#bookmarks, #folderDockList) .motion-drag-shifted {
+  transform: var(--motion-drag-shift);
+}
+
+.motion-drag-active :is(.bookmark__delete, .folder-card__delete, .folder-card__rename-button) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.motion-drag-active #folderDockList .motion-drag-receive {
+  border-color: var(--focus-color);
+  background: var(--surface-active);
+  box-shadow: inset 0 0 0 1px var(--focus-color);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-drag-lift { will-change: auto; }
+}

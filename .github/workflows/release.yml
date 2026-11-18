@@ -1,6 +1,8 @@
 name: Build and release Edge extension
 
 on:
+  pull_request:
+    branches: [master]
   push:
     branches: [master]
   workflow_dispatch:
@@ -10,11 +12,39 @@ permissions:
 
 # Serialize releases so an older build cannot replace the latest download.
 concurrency:
-  group: edge-release
+  group: edge-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  test-edge:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Locate Microsoft Edge
+        shell: pwsh
+        run: |
+          $edge = @("${env:ProgramFiles(x86)}/Microsoft/Edge/Application/msedge.exe", "$env:ProgramFiles/Microsoft/Edge/Application/msedge.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (!$edge) { throw 'Microsoft Edge not found on runner' }
+          "PUPPETEER_EXECUTABLE_PATH=$edge" >> $env:GITHUB_ENV
+      - run: npm test -- --runInBand
+      - run: node scripts/test_bookmark_organization.cjs
+      - run: node scripts/smoke_bookmark_recovery.cjs
+      - run: node scripts/test_visit_preview.cjs
+
   release:
+    needs: test-edge
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 20

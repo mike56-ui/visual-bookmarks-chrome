@@ -5,14 +5,14 @@ const colorTheme = () => document.documentElement.classList.toggle('dark', color
 async function toggleTheme() {
   const { settings } = await browser.storage.local.get('settings');
 
-  if (settings.color_theme === 'os') {
-    colorScheme.removeListener(colorTheme);
+  colorScheme.removeListener(colorTheme);
+  if (settings?.color_theme === 'os') {
     colorTheme();
     colorScheme.addListener(colorTheme);
     return true;
   }
 
-  if (settings.color_theme === 'dark') {
+  if (settings?.color_theme === 'dark') {
     document.documentElement.classList.add('dark');
   } else {
     document.documentElement.classList.remove('dark');

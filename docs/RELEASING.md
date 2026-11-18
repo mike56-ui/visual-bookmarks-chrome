@@ -8,7 +8,7 @@
 
 安装包固定名为 `visual-bookmarks-edge.zip`，ZIP 根目录包含 `manifest.json`。安装步骤见 [安装说明](release-notes.md)。
 
-版本号为 `7.7.1.<GitHub Actions run_number>`。CI 只对构建产物注入版本，不会提交版本文件或触发循环。重新运行同一次 workflow 保持相同版本，并保留已发布的原始包。版本每段不超过 65535，超过时构建将失败；届时需要提高前三段基础版本并调整构建编号方案。修改基础版本后必须保持版本号严格递增。
+版本号由 `manifest.config.js` 中的基础版本与 GitHub Actions 运行编号组成，例如 `7.7.3.4`。CI 将编号写入构建产物。重新运行同一次工作流会保留已发布的安装包。版本每段的上限为 65535，调整基础版本后应确保新版本号严格递增。
 
 工作流需要仓库允许 GitHub Actions，以及 `GITHUB_TOKEN` 的 `contents: write` 权限，不需要额外的 GitHub Token。若 fork 默认禁用了 Actions，请在仓库 Actions 页面启用。
 

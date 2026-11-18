@@ -49,12 +49,6 @@ export default [
         type: 'switch'
       },
       {
-        id: 'logo_external',
-        title: browser.i18n.getMessage('logo_external'),
-        note: browser.i18n.getMessage('logo_external_note'),
-        type: 'switch'
-      },
-      {
         group: [
           {
             id: 'show_toolbar',
@@ -166,11 +160,6 @@ export default [
             id: 'thumbnails_update_button',
             title: browser.i18n.getMessage('thumbnails_update_button'),
             note: browser.i18n.getMessage('thumbnails_update_warn'),
-            type: 'switch'
-          },
-          {
-            id: 'auto_generate_thumbnail',
-            title: browser.i18n.getMessage('auto_generate_thumbnail'),
             type: 'switch'
           },
           {

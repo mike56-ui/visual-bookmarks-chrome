@@ -4,10 +4,10 @@ import html from './template.html';
 import styles from './index.css';
 import '../vb-popup';
 import {
-  FAVICON_GOOGLE,
   SERVICES_COUNT
 } from '../../constants';
 import {
+  faviconURL,
   $escapeHtml,
   $uid
 } from '../../utils';
@@ -103,8 +103,10 @@ class VBServices extends HTMLElement {
   }
 
   #templateItem({ id, name, link }) {
-    const logo = `${FAVICON_GOOGLE}${link}`;
-    const nameText = document.createTextNode(name).textContent;
+    const logo = $escapeHtml(faviconURL(link, 32));
+    const nameText = $escapeHtml(name);
+    link = $escapeHtml(link);
+    id = $escapeHtml(id);
 
     return /* html */`
       <a class="item" href="${link}" id="${id}" draggable="true">
