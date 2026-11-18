@@ -53,6 +53,7 @@ const Bookmarks = (() => {
   let organizing = false;
   let currentPage = null;
   let pageObserver;
+  let nativeRefreshTimer;
 
   async function init() {
     // screen sizes needed for the service worker
@@ -134,7 +135,7 @@ const Bookmarks = (() => {
 
     browser.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && currentPage && changes[bookmarkOrderKey(currentPage.folderId)] && !organizing) {
-        refresh();
+        refreshFromNative();
       }
     });
 
@@ -649,6 +650,15 @@ const Bookmarks = (() => {
     }
   }
 
+  function refreshFromNative() {
+    clearTimeout(nativeRefreshTimer);
+    if (container.classList.contains('has-dragging')) {
+      nativeRefreshTimer = setTimeout(refreshFromNative, 80);
+      return;
+    }
+    refresh();
+  }
+
   /**
    * Create progress toast
    * @param {Number} number of bookmarks
@@ -1020,6 +1030,7 @@ const Bookmarks = (() => {
   return {
     init,
     refresh,
+    refreshFromNative,
     createBookmark,
     updateBookmark,
     removeFromBrowser,

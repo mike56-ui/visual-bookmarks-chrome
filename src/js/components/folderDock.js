@@ -78,7 +78,10 @@ class FolderDock {
   scheduleRender() {
     if (this.#editingId) return;
     window.clearTimeout(this.#renderTimer);
-    this.#renderTimer = window.setTimeout(() => this.render(), 80);
+    this.#renderTimer = window.setTimeout(() => {
+      if (document.body.classList.contains('motion-drag-active')) this.scheduleRender();
+      else this.render();
+    }, 80);
   }
 
   async render() {

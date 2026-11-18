@@ -334,7 +334,7 @@ describe('Chromium real-bookmark dock workflow', () => {
   });
 
   it('shows a useful empty state for an empty real folder', async() => {
-    await extPage.click(`[data-folder-id="${data.emptyId}"] .folder-card__open`);
+    await extPage.evaluate(id => document.querySelector(`[data-folder-id="${id}"] .folder-card__open`).click(), data.emptyId);
     await extPage.waitForFunction(id => {
       const grid = document.getElementById('bookmarks');
       return grid.dataset.folder === id && !grid.querySelector('.bookmark') && grid.querySelector('.empty-search');

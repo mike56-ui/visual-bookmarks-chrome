@@ -67,7 +67,13 @@ function chromium() {
         const nodes = document.querySelectorAll('#bookmarks .bookmark');
         return ids.every((id, index) => nodes[index]?.dataset.id === id);
       }, { timeout: 8000 }, expected).catch(async(error) => {
-        throw new Error('Grid expected ' + expected + ', received ' + (await visible()).slice(0, 4) + ': ' + error);
+        const trace = await page.evaluate(() => ({
+          gesture: window.organizationTrace,
+          mode: document.getElementById('bookmarks').dataset.orderMode,
+          toast: [...document.querySelectorAll('.toast__message')].map(node => node.textContent)
+        }));
+        throw new Error('Grid expected ' + expected + ', received ' + (await visible()).slice(0, 4)
+          + ': ' + error + '. ' + JSON.stringify(trace));
       });
     };
     const selectFolder = async id => {
@@ -82,6 +88,18 @@ function chromium() {
       await page.click(latest + ' .toast__action');
     };
     const drag = async(source, target, xRatio = 0.8, yRatio = 0.5) => {
+      await page.evaluate(() => {
+        window.organizationTrace = [];
+        if (window.organizationTraceObserver) return;
+        const grid = document.getElementById('bookmarks');
+        window.organizationTraceObserver = new MutationObserver(() => window.organizationTrace.push({
+          busy: grid.hasAttribute('aria-busy'), dragging: document.body.classList.contains('motion-drag-active')
+        }));
+        window.organizationTraceObserver.observe(grid, { attributes: true, attributeFilter: ['aria-busy'] });
+        window.organizationTraceObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      });
+      await page.$eval(target, item => item.scrollIntoView({ block: 'nearest' }));
+      await page.$eval(source, item => item.scrollIntoView({ block: 'nearest' }));
       const start = await page.$eval(source, item => {
         const rect = item.getBoundingClientRect();
         return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
@@ -154,8 +172,8 @@ function chromium() {
     assert.deepEqual(await raw(data.bar), initialBar, 'undo uses original sibling anchors');
 
     const rootBefore = await leftOrder();
-    const index = rootBefore.indexOf(data.a);
-    await drag(folder(data.c) + ' .folder-card__open', folder(data.a) + ' .folder-card__open', 0.5, 0.2);
+    const index = rootBefore.indexOf(data.b);
+    await drag(folder(data.c) + ' .folder-card__open', folder(data.b) + ' .folder-card__open', 0.5, 0.2);
     await page.waitForFunction(({ id, index }) => document.querySelectorAll('#folderDockList .folder-card')[index]
       ?.dataset.folderId === id, { timeout: 8000 }, { id: data.c, index });
     const dataAfter = await leftOrder();

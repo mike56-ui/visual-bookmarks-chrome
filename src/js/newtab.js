@@ -130,7 +130,7 @@ async function init() {
 
   const scheduleGridRefresh = () => {
     window.clearTimeout(nativeBookmarksRefreshTimer);
-    nativeBookmarksRefreshTimer = window.setTimeout(() => Bookmarks.refresh(), 100);
+    nativeBookmarksRefreshTimer = window.setTimeout(Bookmarks.refreshFromNative, 100);
   };
   const refreshNativeBookmarks = () => {
     folderDock.scheduleRender();
