@@ -20,8 +20,12 @@ async function check(existingBrowser = false) {
     contextMenus: { onClicked: event('contextMenu') },
     action: { onClicked: event('action') },
     notifications: { onClicked: event('notification'), onButtonClicked: event('notificationButton') },
+    windows: { onFocusChanged: event('windowFocus') },
     tabs: {
       onCreated: event('tabCreated'),
+      onUpdated: event('tabUpdated'),
+      onActivated: event('tabActivated'),
+      onRemoved: event('tabRemoved'),
       query: (options, callback) => callback(tabs),
       update: (id, options) => actions.push({ kind: 'activate', id, ...options }),
       create: options => actions.push({ kind: 'create', ...options })
@@ -35,6 +39,9 @@ async function check(existingBrowser = false) {
   assert.equal(context.browser, api);
   assert.equal(typeof listeners.installed, 'function');
   assert.equal(typeof listeners.action, 'function');
+  assert.equal(typeof listeners.tabUpdated, 'function');
+  assert.equal(typeof listeners.tabActivated, 'function');
+  assert.equal(typeof listeners.windowFocus, 'function');
 
   listeners.action();
   assert.equal(actions.pop().url, page, 'An old Edge new tab must open the actual bookmark page');
@@ -52,5 +59,6 @@ async function check(existingBrowser = false) {
 (async () => {
   await check();
   await check(true);
+  await require('./smoke_visit_preview.cjs')();
   console.log('PASS: production module startup, event registration, toolbar opening and page reuse');
 })().catch(error => { console.error(error); process.exitCode = 1; });

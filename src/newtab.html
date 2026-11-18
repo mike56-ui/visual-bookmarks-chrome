@@ -11,23 +11,44 @@
   <script src="js/theme.js"></script>
 </head>
 
-<body>
+<body data-folder-dock="left">
   <aside class="aside-controls" id="aside_controls">
     <!-- buttons -->
   </aside>
 
   <aside class="folder-dock sticky" id="folderDock" data-dock="left" aria-label="Bookmark folders">
-    <button class="folder-dock__handle" id="folderDockHandle" type="button" aria-label="Move folder dock"></button>
+    <button class="folder-dock__handle" id="folderDockHandle" type="button" aria-label="Move folder panel" title="Drag or use arrow keys"></button>
     <div class="folder-dock__toolbar">
       <span class="folder-dock__title">文件夹</span>
       <button class="folder-dock__add" id="folderDockAdd" type="button" aria-label="新建文件夹" title="新建文件夹">+</button>
     </div>
     <nav class="folder-dock__list" id="folderDockList" aria-label="Bookmark folders"></nav>
+    <button class="folder-dock__resize" id="folderDockResize" type="button" aria-label="Resize folder panel" title="Drag or use arrow keys"></button>
   </aside>
 
   <main id="main" class="app">
     <div class="container">
-      <header></header>
+      <div class="newtab-toolbar">
+        <button class="newtab-toolbar__button" id="folderDockToggle" type="button" aria-expanded="false" aria-controls="folderDock" hidden>
+          <svg width="19" height="19" aria-hidden="true"><use href="/img/symbol.svg#bookmarks"></use></svg>
+        </button>
+        <header></header>
+        <div class="newtab-actions" id="newtabActions">
+          <button class="newtab-toolbar__button" id="newtabActionsToggle" type="button" aria-expanded="false" aria-controls="newtabActionsList" aria-label="More actions" title="More actions">
+            <span aria-hidden="true">···</span>
+          </button>
+          <div class="newtab-actions__list" id="newtabActionsList" hidden>
+            <button type="button" data-newtab-action="add" data-locale-message="add_bookmark">Add bookmark</button>
+            <label class="newtab-actions__option">
+              <input type="checkbox" id="visitPreviewEnabled">
+              <span id="visitPreviewLabel">Update previews when visiting</span>
+            </label>
+            <button type="button" data-newtab-action="reset">Reset folder panel</button>
+            <button type="button" data-newtab-action="common-order" hidden>Restore frequently used order</button>
+            <a href="/options.html" data-locale-message="options">Settings</a>
+          </div>
+        </div>
+      </div>
       <div class="content" id="content">
         <div class="grid" id="bookmarks"></div>
         <div id="dial_loading" class="dial-loading" hidden>

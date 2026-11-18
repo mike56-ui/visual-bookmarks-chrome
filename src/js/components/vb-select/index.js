@@ -1,4 +1,4 @@
-import { $createElement } from '../../utils';
+import { $createElement, $escapeHtml } from '../../utils';
 
 class VbSelectFolders extends HTMLElement {
   connectedCallback() {
@@ -95,12 +95,12 @@ class VbSelectFolders extends HTMLElement {
             prefix = `&nbsp;${prefix}` + '&nbsp;';
           }
 
-          const name = `${prefix} ${folder.title}`;
+          const name = `${prefix} ${$escapeHtml(folder.title)}`;
           options.push(
             this.#optionTemplate
               .replace('{selected}', folder.id === folderId ? ' selected' : '')
               .replace('{value}', folder.id)
-              .replace('{name}', name)
+              .replace('{name}', () => name)
               .replace('{childrenLength}', folder.childrenLength)
           );
 

@@ -1,24 +1,15 @@
-import '../vb-select';
 import '../vb-popup';
 import html from './template.html';
 import { $createElement } from '../../utils';
-import { getFolders } from '../../api/bookmark';
 import { SEARCH_ENGINES } from '../../constants';
 import { settings } from '../../settings';
 import { containsPermissions, requestPermissions } from '../../api/permissions';
 
 class VbHeader extends HTMLElement {
-  initialFolderId = null;
-  folderId = null;
-  initialHash = window.location.hash;
-
-  backNode = null;
-  headerNode = null;
   formNode = null;
   inputNode = null;
   suggestNode = null;
   resetNode = null;
-  selectNode = null;
   vbPopup = null;
   vbPopupBtn = null;
   vbPopupContent = null;
@@ -40,26 +31,15 @@ class VbHeader extends HTMLElement {
     this.#dettachEvents();
   }
 
-  async #render() {
+  #render() {
     this.insertAdjacentHTML('afterbegin', html);
-    // initial folder id
-    this.initialFolderId = this.getAttribute('initial-folder-id');
-    // current folder id
-    this.folderId = this.getAttribute('folder-id');
-
-    this.headerNode = this.querySelector('.header');
     // form nodes
     this.formNode = this.querySelector('form');
     this.inputNode = this.querySelector('input');
+    this.inputNode.setAttribute('aria-label', browser.i18n.getMessage('search') || 'Search');
     this.permSuggestionsNode = this.querySelector('#searchSuggestions');
     this.resetNode = this.querySelector('#searchReset');
     this.buttonSubmitNode = this.querySelector('#searchSubmit');
-    // get vb-select-folders component
-    this.selectNode = this.querySelector('vb-select-folders');
-    this.selectNode.setAttribute('folder-id', this.folderId);
-    // get folders list for select component
-    this.selectNode.folders = await getFolders();
-
     // get vb-popup
     this.vbPopup = this.querySelector('vb-popup');
     this.vbPopup.setAttribute('label', browser.i18n.getMessage('toggle_search_popup'));
@@ -69,7 +49,6 @@ class VbHeader extends HTMLElement {
 
     this.#setSearchEngines();
     this.#attachEvents();
-    this.hashchange();
 
     if (settings.$.search_autofocus) {
       this.inputNode.focus();
@@ -95,7 +74,8 @@ class VbHeader extends HTMLElement {
         return true;
       }
       return false;
-    });
+    }) ?? SEARCH_ENGINES[0];
+    engine = engineObject.value;
     this.engineNodes[this.engineIndex].classList.add('is-active');
 
     const symbol = engineObject.value === 'browser' ? 'web_search' : engineObject.value;
@@ -105,9 +85,10 @@ class VbHeader extends HTMLElement {
       ? browser.i18n.getMessage('placeholder_input_search_bookmarks')
       : engineObject.title;
 
-    settings
-      .updateKey('search_engine', engine)
-      .then(() => {
+    const updateEngine = settings.$.search_engine === engine
+      ? Promise.resolve()
+      : settings.updateKey('search_engine', engine);
+    updateEngine.catch(() => {}).then(() => {
         this.inputNode.placeholder = engine !== 'browser'
           ? browser.i18n.getMessage('placeholder_input_search', [placeholderEngine])
           : browser.i18n.getMessage('search');
@@ -118,6 +99,7 @@ class VbHeader extends HTMLElement {
         this.buttonSubmitNode.hidden = this.isBookmarksEngine;
 
         if (!this.isBookmarksEngine) {
+          this.suggestNode?.remove();
           this.suggestNode = $createElement('div', {
             id: 'suggest',
             class: 'suggest',
@@ -191,9 +173,6 @@ class VbHeader extends HTMLElement {
     this.handleReset = this.handleReset.bind(this);
     this.resetNode.addEventListener('click', this.handleReset);
 
-    this.handleSelectHash = this.handleSelectHash.bind(this);
-    this.selectNode.addEventListener('vb:select:change', this.handleSelectHash);
-
     this.handleSubmit = this.handleSubmit.bind(this);
     this.formNode.addEventListener('submit', this.handleSubmit);
 
@@ -206,14 +185,6 @@ class VbHeader extends HTMLElement {
     this.handlePopupState = this.handlePopupState.bind(this);
     this.vbPopup.addEventListener('vb:popup:open', this.handlePopupState);
     this.vbPopup.addEventListener('vb:popup:close', this.handlePopupState);
-
-    // listen for folder change event
-    this.handleHash = this.hashchange.bind(this);
-    document.addEventListener('changeFolder', this.handleHash);
-
-    // listen for folders update event
-    this.handleUpdateFolders = this.handleUpdateFolders.bind(this);
-    document.addEventListener('updateFolderList', this.handleUpdateFolders);
 
     this.handleKeydown = this.handleKeydown.bind(this);
     this.inputNode.addEventListener('keydown', this.handleKeydown);
@@ -232,7 +203,6 @@ class VbHeader extends HTMLElement {
     this.inputNode.removeEventListener('input', this.handleInput);
     this.permSuggestionsNode.removeEventListener('click', this.handleSuggestPermission);
     this.resetNode.removeEventListener('click', this.handleReset);
-    this.selectNode.removeEventListener('vb:select:change', this.handleSelectHash);
     this.formNode.removeEventListener('submit', this.handleSubmit);
     this.vbPopupContent.removeEventListener('click', this.handleClickEngine);
     this.vbPopup.removeEventListener('keydown', this.handleKeydownEngine);
@@ -240,9 +210,7 @@ class VbHeader extends HTMLElement {
     this.vbPopup.removeEventListener('vb:popup:close', this.handlePopupState);
     this.inputNode.removeEventListener('keydown', this.handleKeydown);
     this.formNode.removeEventListener('click', this.handleClickSuggest);
-    document.removeEventListener('changeFolder', this.handleHash);
-    document.removeEventListener('updateFolderList', this.handleUpdateFolders);
-    document.removeEventListener('keydown', this.handleEscape);
+    document.removeEventListener('keydown', this.handleDocumentKeydown);
     document.removeEventListener('click', this.handleDocClick);
   }
 
@@ -256,43 +224,8 @@ class VbHeader extends HTMLElement {
     }
   };
 
-  async handleUpdateFolders() {
-    if (this.selectNode) {
-      this.selectNode.folders = await getFolders();
-    }
-  }
-
   handlePopupState({ type }) {
     this.vbPopupActive = type === 'vb:popup:open';
-  }
-
-  hashchange() {
-    const hash = window.location.hash.slice(1);
-
-    if (hash && hash !== this.initialFolderId) {
-      if (!this.backNode) {
-        this.backNode = $createElement(
-          'button',
-          {
-            class: 'back',
-            'aria-label': browser.i18n.getMessage('history_back')
-          },
-          {
-            html: `<svg width="20" height="20"><use xlink:href="/img/symbol.svg#arrow_back"/></svg>`
-          }
-        );
-        this.handleBack = this.handleBack.bind(this);
-        this.headerNode.insertAdjacentElement('afterbegin', this.backNode);
-        this.backNode.addEventListener('click', this.handleBack);
-      }
-    } else {
-      if (this.backNode) {
-        this.backNode.removeEventListener('click', this.handleBack);
-        this.backNode.remove();
-        this.backNode = null;
-      }
-    }
-    this.selectNode.setAttribute('folder-id', hash || this.initialFolderId);
   }
 
   handleKeydownEngine(e) {
@@ -355,21 +288,6 @@ class VbHeader extends HTMLElement {
     this.inputNode.focus();
   }
 
-  handleSelectHash(e) {
-    window.location.hash = e.detail;
-  }
-
-  handleBack() {
-    // if initialHash does not match location hash
-    // can go back in history
-    // until the hashes are equal
-    if (this.initialHash === window.location.hash) {
-      window.location.hash = this.initialFolderId;
-    } else {
-      window.history.back();
-    }
-  }
-
   handleReset() {
     this.inputNode.value = '';
     if (this.isBookmarksEngine) {
@@ -388,6 +306,7 @@ class VbHeader extends HTMLElement {
   }
 
   handleInput(e) {
+    if (e.isComposing) return;
     const search = e.target.value;
     if (this.isBookmarksEngine) {
       this.dispatchEvent(
@@ -409,14 +328,20 @@ class VbHeader extends HTMLElement {
   }
 
   handleDocumentKeydown(e) {
-    if (e.code === 'Escape' && this.suggestList.length) {
+    if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    const active = this.getActiveElement();
+    const searchShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k';
+    const slashShortcut = e.code === 'Slash' && !e.ctrlKey && !e.metaKey && !e.altKey
+      && !active?.matches('input, textarea, select, [contenteditable]');
+
+    if (e.key === 'Escape' && this.suggestList.length) {
       this.closeSuggest();
-    } else if (
-      e.code === 'Slash' &&
-      this.getActiveElement()?.tagName !== 'INPUT'
-    ) {
+    } else if (e.key === 'Escape' && active === this.inputNode && this.inputNode.value) {
+      this.handleReset();
+    } else if (searchShortcut || slashShortcut) {
       e.preventDefault();
       this.inputNode.focus();
+      this.inputNode.select();
     }
   }
 
@@ -427,7 +352,7 @@ class VbHeader extends HTMLElement {
   }
 
   handleKeydown(e) {
-    if (!this.suggestList.length) return true;
+    if (e.isComposing || e.keyCode === 229 || !this.suggestList.length) return true;
 
     switch (e.key) {
       case 'ArrowUp':

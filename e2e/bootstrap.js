@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import puppeteer from 'puppeteer';
 
-const EXTENSION_DIR = path.join(process.cwd(), '/extension_chrome');
+const EXTENSION_DIR = path.resolve(process.env.VB_TEST_EXTENSION || 'extension_chrome');
 
 function getChromiumPath() {
   const configuredPath = process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -33,7 +33,7 @@ async function bootstrap(options = {}) {
   const { devtools = false, slowMo = false } = options;
   const browser = await puppeteer.launch({
     executablePath: getChromiumPath(),
-    headless: false,
+    headless: 'new',
     pipe: true,
     timeout: 60000,
     devtools,

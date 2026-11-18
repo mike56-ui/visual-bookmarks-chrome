@@ -21,7 +21,8 @@ const template = /* html */
 </div>`;
 
 function confirmPopup(message) {
-  let confirm = false;
+  let decision;
+  let opened = false;
   const popupEl = $createElement('div',
     {
       class: 'gmodal gmodal--popup',
@@ -33,42 +34,33 @@ function confirmPopup(message) {
   );
   document.body.appendChild(popupEl);
 
-  const popupBody = document.getElementById('popupBody');
+  const popupBody = popupEl.querySelector('#popupBody');
   const controls = Array.from(popupEl.querySelectorAll('[data-popup]'));
   const resolveControl = popupEl.querySelector('[data-popup="resolve"]');
   const popupInstance = new Gmodal(popupEl, {
     closeBackdrop: false
   });
-  popupInstance.element.addEventListener('gmodal:open', () => {
-    resolveControl.focus();
-  });
-
-
   popupBody.textContent = message;
-  popupInstance.open();
 
   return new Promise((resolve) => {
     const handleClick = function() {
-      const target = this.dataset.popup;
-      confirm = (target === 'resolve');
-      popupInstance.close();
+      if (decision !== undefined) return;
+      decision = this.dataset.popup === 'resolve';
+      if (opened) popupInstance.close();
     };
 
-    const closePopup = function() {
-      controls.forEach(control => {
-        control.removeEventListener('click', handleClick);
-      });
-
-      popupInstance.element.removeEventListener('gmodal:close', closePopup);
-      resolve(confirm);
-      confirm = false;
-      popupInstance.destroy();
+    popupEl.addEventListener('gmodal:open', () => {
+      opened = true;
+      if (decision === undefined) resolveControl.focus();
+      else popupInstance.close();
+    }, { once: true });
+    popupEl.addEventListener('gmodal:close', () => {
+      controls.forEach(control => control.removeEventListener('click', handleClick));
       popupEl.remove();
-    };
-    controls.forEach(control => {
-      control.addEventListener('click', handleClick);
-    });
-    popupInstance.element.addEventListener('gmodal:close', closePopup);
+      resolve(decision === true);
+    }, { once: true });
+    controls.forEach(control => control.addEventListener('click', handleClick));
+    popupInstance.open();
   });
 }
 

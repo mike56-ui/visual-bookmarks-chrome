@@ -1,3 +1,4 @@
+import './usageWorker';
 import ImageDB from './api/imageDB';
 import browserContextMenu from './plugins/browserContextMenu';
 import { settings } from './settings';
@@ -10,9 +11,7 @@ import {
 import {
   create,
   flattenArrayBookmarks,
-  search,
-  remove,
-  removeTree
+  search
 } from './api/bookmark';
 import {
   THUMBNAIL_POPUP_HEIGHT,
@@ -22,6 +21,7 @@ import {
   FIREFOX_BROWSER
 } from './constants';
 import { containsPermissions } from './api/permissions';
+import { isWebUrl, registerVisitPreview } from './visitPreview';
 
 function browserActionHandler() {
   const bookmarkPage = browser.runtime.getURL('newtab.html');
@@ -40,97 +40,60 @@ function browserActionHandler() {
 
 async function initContextMenu() {
   const { settings } = await storage.local.get('settings');
-  browserContextMenu.init(settings.show_contextmenu_item);
+  browserContextMenu.init(settings?.show_contextmenu_item);
 }
 
-// TODO a refactor is needed to make the function return a promise
-async function captureScreen(link, callback) {
-  const { screen } = await storage.local.get('screen');
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  browser.windows.create({
-    url: link,
-    state: 'normal',
-    left: screen.availWidth - 1,
-    top: screen.availHeight - 1,
-    width: 1,
-    height: 1,
-    type: 'popup'
-  }, async function(w) {
-    // capture timeout
-    let timeout = 25000;
+async function captureManualThumbnail({ id, captureUrl }) {
+  if (!isWebUrl(captureUrl) || !await containsPermissions({ origins: ['<all_urls>'] })) {
+    return { warning: 'Cannot access contents of URL' };
+  }
+  const [bookmark] = await browser.bookmarks.get(id);
+  if (bookmark?.url !== captureUrl) return { warning: 'Bookmark address changed' };
+  if ((await ImageDB.get(id))?.custom) return { warning: 'Custom cover preserved' };
 
-    const { settings } = await storage.local.get('settings');
-    // delay in milliseconds
-    const captureDelay = (parseFloat(settings.thumbnails_update_delay) || 0.5) * 1000;
-
-    if (captureDelay > 500) {
-      timeout += captureDelay;
+  const { settings, screen } = await storage.local.get(['settings', 'screen']);
+  const wait = Math.min(5000, Math.max(500, (Number(settings?.thumbnails_update_delay) || 0.5) * 1000));
+  const size = {
+    width: THUMBNAIL_POPUP_WIDTH,
+    height: THUMBNAIL_POPUP_HEIGHT,
+    ...(screen && {
+      left: Math.max(0, screen.availWidth - THUMBNAIL_POPUP_WIDTH),
+      top: Math.max(0, screen.availHeight - THUMBNAIL_POPUP_HEIGHT)
+    })
+  };
+  const popup = await browser.windows.create({ url: captureUrl, type: 'popup', focused: true, ...size });
+  try {
+    const tabId = popup.tabs?.[0]?.id;
+    if (tabId === undefined) return { warning: 'Could not open screenshot tab' };
+    await browser.tabs.update(tabId, { muted: true });
+    const deadline = Date.now() + 20000;
+    let tab = await browser.tabs.get(tabId);
+    while (tab.status !== 'complete' && Date.now() < deadline) {
+      await delay(250);
+      tab = await browser.tabs.get(tabId);
     }
-
-    if (!w.tabs || !w.tabs.length) {
-      browser.windows.remove(w.id);
-      console.error('not found page');
-      return false;
+    if (tab.status !== 'complete') return { warning: 'Timeout waiting for a screenshot' };
+    await delay(wait);
+    const visible = await browser.tabs.get(tabId);
+    if (!visible.active || visible.status !== 'complete' || visible.url !== tab.url || !isWebUrl(visible.url)) {
+      return { warning: 'The screenshot page changed' };
     }
-
-    let tab = w.tabs[0];
-    let stop = false;
-
-    browser.tabs.update(tab.id, {
-      muted: true
-    });
-
-    let closeWindow = setTimeout(function() {
-      browser.windows.remove(w.id);
-      callback({ error: 'long_load', url: tab.url });
-      stop = true;
-    }, timeout);
-
-    checkerStatus();
-
-    function checkerStatus() {
-      if (stop) {
-        clearTimeout(closeWindow);
-        return false;
-      }
-
-      browser.tabs.get(tab.id, function(tabInfo) {
-        if (tabInfo.status === 'complete') {
-          browser.scripting.insertCSS({
-            target: {
-              tabId: tab.id
-            },
-            css: 'html, body { overflow-y: hidden !important; }'
-          });
-          browser.windows.update(w.id, {
-            left: screen.availWidth - THUMBNAIL_POPUP_WIDTH,
-            top: screen.availHeight - THUMBNAIL_POPUP_HEIGHT,
-            width: THUMBNAIL_POPUP_WIDTH,
-            height: THUMBNAIL_POPUP_HEIGHT,
-            focused: true
-          }, function() {
-            setTimeout(() => {
-              browser.tabs.captureVisibleTab(w.id, { format: 'png' }, function(dataUrl) {
-                callback({
-                  capture: dataUrl,
-                  title: tabInfo.title
-                });
-                try {
-                  browser.windows.remove(w.id, () => {
-                    clearTimeout(closeWindow);
-                  });
-                } catch (e) {}
-              });
-            }, captureDelay);
-          });
-        } else {
-          setTimeout(() => {
-            checkerStatus();
-          }, 300);
-        }
-      });
+    const data = await browser.tabs.captureVisibleTab(popup.id, { format: 'png' });
+    const after = await browser.tabs.get(tabId);
+    const [current] = await browser.bookmarks.get(id);
+    if (!data || !after.active || after.url !== visible.url
+      || after.status !== 'complete' || current?.url !== captureUrl) {
+      return { warning: 'The screenshot page changed' };
     }
-  });
+    const blob = await $resizeThumbnail($base64ToBlob(data, 'image/png'));
+    return await ImageDB.putManualThumbnail(id, captureUrl, blob) ? 'success' : { warning: 'Custom cover preserved' };
+  } finally {
+    await browser.windows.remove(popup.id).catch(() => undefined);
+  }
 }
 
 function handleCreateBookmark(data) {
@@ -162,7 +125,6 @@ function handleCreateBookmark(data) {
         console.warn(err);
       });
 
-      // do not generate a thumbnail if you could not create a bookmark or the auto-generation option is turned off
       if (!response) return;
 
       if (settings.close_tab_after_adding_bookmark) {
@@ -175,7 +137,7 @@ function handleCreateBookmark(data) {
 
 async function handleCreatedTab(tab) {
   const { settings } = await storage.local.get('settings');
-  if (!tab.incognito && settings.search_autofocus && NEWTAB_EMPTY_URLS.includes(tab.pendingUrl)) {
+  if (!tab.incognito && settings?.search_autofocus && NEWTAB_EMPTY_URLS.includes(tab.pendingUrl)) {
     // bug in MS Edge causes runtime.getURL to return the chrome-extension namespace, while it opens through the extension namespace.
     const url = /Edg\//.test(navigator.userAgent)
       ? browser.runtime.getURL('newtab.html').replace(/^chrome-extension:/, 'extension:')
@@ -188,19 +150,19 @@ async function handleCreatedTab(tab) {
   }
 }
 
-function handleCreateThumbnail(id, bookmark, callback) {
-  captureScreen(bookmark.url, async function(data) {
-    if (data.error) {
-      return callback && callback();
-    }
-    const fileBlob = $base64ToBlob(data.capture, 'image/webp');
-    const blob = await $resizeThumbnail(fileBlob);
-    await ImageDB.update({ id: bookmark.id, blob, custom: false });
-    callback && callback();
-  });
-}
-
 async function handleBookmarks(eventType, id, bookmark) {
+  if (eventType === 'removed') {
+    const removed = [bookmark.node, ...flattenArrayBookmarks(bookmark.node.children ?? [], true)];
+    await Promise.all(removed.map(node => ImageDB.delete(node.id)));
+    const urls = new Set(removed.map(node => node.url).filter(Boolean));
+    await Promise.all([...urls].map(async url => {
+      if (!(await browser.bookmarks.search({ url })).some(node => node.url === url)) {
+        await ImageDB.deleteVisitPreview(url);
+      }
+    }));
+  } else if (eventType === 'changed' && bookmark.url) {
+    await ImageDB.deleteMismatchedThumbnail(id, bookmark.url);
+  }
   const { importingBookmarks } = await storage.local.get('importingBookmarks');
   if (importingBookmarks) return;
 
@@ -214,43 +176,9 @@ async function handleBookmarks(eventType, id, bookmark) {
   // to avoid duplicating actions when editing bookmarks,
   // we will ignore further execution if our application is in the active tab
   const tabs = await browser.tabs.query({ active: true });
-  const tabUrl = tabs[0].url.replace(/#\d*/, '');
+  const tabUrl = tabs[0]?.url?.replace(/#\d*/, '');
   if (NEWTAB_URLS.includes(tabUrl)) return;
-
-  const { settings } = await storage.local.get('settings');
-  const sendMessageCallback = () => {
-    browser.runtime.sendMessage({ bookmarksUpdated: true }, () => {
-      if (browser.runtime.lastError) {
-        return;
-      }
-    });
-  };
-
-  // create a thumbnail if required
-  // send a command to update the list of bookmarks
-  if (
-    ['created', 'changed'].includes(eventType) &&
-    settings.auto_generate_thumbnail &&
-    bookmark.url
-  ) {
-    const allUrlsPermission = await containsPermissions({ origins: ['<all_urls>'] });
-    allUrlsPermission ? handleCreateThumbnail(id, bookmark, sendMessageCallback) : sendMessageCallback();
-  } else {
-    sendMessageCallback();
-  }
-
-  // delete all thumbnails associated with the folder being deleted
-  if (eventType === 'removed') {
-    const deletedThumbsPromises = [ImageDB.delete(id)];
-
-    if (!bookmark.node.url) {
-      deletedThumbsPromises.push(
-        ...flattenArrayBookmarks(bookmark.node.children, true).map(({ id }) => ImageDB.delete(id))
-      );
-    }
-
-    Promise.all(deletedThumbsPromises);
-  }
+  await browser.runtime.sendMessage({ bookmarksUpdated: true }).catch(() => undefined);
 }
 
 browser.storage.onChanged.addListener((changes, area) => {
@@ -284,10 +212,13 @@ browser.runtime.onInstalled.addListener(async(event) => {
   }
 });
 
-browser.bookmarks.onCreated.addListener((id, bookmark) => handleBookmarks('created', id, bookmark));
-browser.bookmarks.onChanged.addListener((id, bookmark) => handleBookmarks('changed', id, bookmark));
-browser.bookmarks.onRemoved.addListener((id, bookmark) => handleBookmarks('removed', id, bookmark));
-browser.bookmarks.onMoved.addListener((id, bookmark) => handleBookmarks('moved', id, bookmark));
+const bookmarkListener = event => (id, bookmark) => {
+  handleBookmarks(event, id, bookmark).catch(error => console.warn(error));
+};
+browser.bookmarks.onCreated.addListener(bookmarkListener('created'));
+browser.bookmarks.onChanged.addListener(bookmarkListener('changed'));
+browser.bookmarks.onRemoved.addListener(bookmarkListener('removed'));
+browser.bookmarks.onMoved.addListener(bookmarkListener('moved'));
 
 if (!FIREFOX_BROWSER) {
   // firefox does not support onImportBegan and onImportEnded events
@@ -317,34 +248,16 @@ browser.notifications.onButtonClicked.addListener((id) => {
 
 browser.runtime.onMessage.addListener(function(request, sender, sendResponse) {
   if (request.capture) {
-    const { id, captureUrl } = request.capture;
-
-    // captureScreen(request.captureUrl, async function(data) {
-    captureScreen(captureUrl, async function(data) {
-      if (data && data.error) {
-        try {
-          sendResponse({ warning: 'Timeout waiting for a screenshot' });
-        } catch (e) {}
-        console.warn(`Timeout waiting for a screenshot ${data.url}`);
-        return false;
-      }
-
-      // If cannot access contents of url
-      if (data && data.capture === undefined) {
-        try {
-          sendResponse({ warning: 'Cannot access contents of url' });
-        } catch (e) {}
-        console.warn(`Cannot access contents of url: ${captureUrl}`);
-        return false;
-      }
-
-      const fileBlob = $base64ToBlob(data.capture, 'image/webp');
-      const blob = await $resizeThumbnail(fileBlob);
-      await ImageDB.update({ id, blob, custom: false });
-      try {
-        sendResponse('success');
-      } catch (e) {}
-    });
+    const extensionRoot = browser.runtime.getURL('');
+    const edgeRoot = extensionRoot.replace(/^chrome-extension:/, 'extension:');
+    if (sender.incognito || (!sender.url?.startsWith(extensionRoot) && !sender.url?.startsWith(edgeRoot))) {
+      sendResponse({ warning: 'Screenshot request denied' });
+      return;
+    }
+    captureManualThumbnail(request.capture)
+      .catch(() => ({ warning: 'Could not update screenshot' }))
+      .then(sendResponse);
+    return true;
   }
 
   // Toggle contextmenu item
@@ -352,24 +265,7 @@ browser.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     const { checked } = request.showContextMenuItem;
     browserContextMenu.toggle(checked);
   }
-
-  // if there is a request to delete bookmarks, they must be deleted.
-  // this is only possible in one case: if the undo timer has not yet expired, but the user has already closed or refreshed the page.
-  // such a request will be handled only in the page’s beforeUnload event.
-  if (request.bookmarksToDelete && Object.keys(request.bookmarksToDelete).length) {
-    const { bookmarksToDelete } = request;
-    Object.keys(bookmarksToDelete).forEach(bookmarkId => {
-      const bookmark = bookmarksToDelete[bookmarkId];
-
-      bookmark.isFolder
-        ? removeTree(bookmarkId).catch(err => console.warn(err))
-        : remove(bookmarkId).catch(err => console.warn(err));
-    });
-  }
-
-  // send a response asynchronously (return true)
-  // this will keep the message channel open to the other end until sendResponse is called
-  return true;
 });
 
 browser.tabs.onCreated.addListener(handleCreatedTab);
+registerVisitPreview();
