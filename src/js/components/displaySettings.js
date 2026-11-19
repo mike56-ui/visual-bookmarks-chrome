@@ -5,6 +5,7 @@ function createSwitch(setting) {
     id: setting.id,
     type: 'checkbox',
     name: setting.id,
+    'aria-labelledby': 'setting-label-' + setting.id,
     class: 'switch__input js-change'
   });
 
@@ -30,6 +31,7 @@ function createSelect(setting) {
     {
       id: setting.id,
       name: setting.id,
+      'aria-labelledby': 'setting-label-' + setting.id,
       class: 'form-control js-change'
     },
     {
@@ -57,6 +59,7 @@ function createTextarea(setting) {
     name: setting.id,
     id: setting.id,
     spellcheck: setting.spellcheck,
+    'aria-labelledby': 'setting-label-' + setting.id,
     placeholder: setting.placeholder
   });
   Object.assign(textarea.dataset, setting.data);
@@ -70,6 +73,7 @@ function createRange(setting) {
     class: 'range__input js-range',
     id: setting.id,
     name: setting.id,
+    'aria-labelledby': 'setting-label-' + setting.id,
     min: setting.min,
     max: setting.max,
     step: setting.step
@@ -180,7 +184,7 @@ function createRow(setting, row = false) {
   const classRow = row ? 'tbl__row' : 'tbl';
   const hidden = setting.hidden ? ' hidden' : '';
   return /* html */ `<div id="setting_${setting.id}" class="${classRow}"${hidden}>
-    <div class="tbl__setting">
+    <div class="tbl__setting" id="setting-label-${setting.id}">
       ${setting.title}
       ${
         setting.note
@@ -196,8 +200,9 @@ export function displaySettings(settings) {
   const tabs = [];
   const sections = [];
 
-  settings.forEach((setting) => {
-    tabs.push(`<div class="tabs__controls md-ripple">${setting.key}</div>`);
+  settings.forEach((setting, index) => {
+    tabs.push(`<button type="button" class="tabs__controls md-ripple" id="options-tab-${index}"
+      role="tab" aria-controls="options-panel-${index}" aria-selected="false" tabindex="-1">${setting.key}</button>`);
 
     const list = setting?.list?.map((item) => {
       if (item.group) {
@@ -209,13 +214,14 @@ export function displaySettings(settings) {
       }
     }).join('');
 
-    sections.push(`<div class="tabs__section">${list ?? ''}</div>`);
+    sections.push(`<div class="tabs__section" id="options-panel-${index}" role="tabpanel"
+      aria-labelledby="options-tab-${index}">${list ?? ''}</div>`);
   });
 
   return (/* html*/
   `<div class="tabs">
       <div class="tabs__bar-wrap">
-        <div class="tabs__bar">
+        <div class="tabs__bar" role="tablist" aria-label="${browser.i18n.getMessage('options')}">
           ${tabs.join('')}
         </div>
       </div>

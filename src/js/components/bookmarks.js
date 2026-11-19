@@ -1,8 +1,11 @@
 import { DragSortify } from '../plugins/dragSortify';
 import { multiswap } from '../plugins/dragSortify/multiswap';
 import Toast from './toast';
+import { reconcileChildren } from './domOrder';
+import { rememberOrderUndo } from './orderUndo';
 import ImageDB from '../api/imageDB';
 import { readUsage } from '../api/usage';
+import { openPreviewCapture } from '../api/previewCapture';
 import { settings, LAST_OPENED_FOLDER_ID } from '../settings';
 import { storage } from '../api/storage';
 import {
@@ -48,12 +51,16 @@ const Bookmarks = (() => {
   const dialLoading = document.getElementById('dial_loading');
   let isGeneratedThumbs = false;
   let viewRequest = 0;
+  let previewRead = 0;
   let searchTimer;
   let searchQuery = '';
   let organizing = false;
   let currentPage = null;
   let pageObserver;
+  let pageControl;
   let nativeRefreshTimer;
+  let toolbar;
+  let toolbarLoading;
 
   async function init() {
     // screen sizes needed for the service worker
@@ -69,13 +76,7 @@ const Bookmarks = (() => {
       container.classList.add('grid--vcenter');
     }
 
-    // Dragging option
-    if (
-      settings.$.drag_and_drop &&
-      !settings.$.sort_by_newest
-    ) {
-      initDrag(container);
-    }
+    syncDragSettings(false);
 
     // Create marker for the last active folder in advance to ensure the correct behavior when this option is used for the first time
     if (
@@ -85,53 +86,10 @@ const Bookmarks = (() => {
       localStorage.setItem(LAST_OPENED_FOLDER_ID, settings.$.default_folder_id);
     }
 
-    // Search bookmarks if toolbar enable
-    if (settings.$.show_toolbar) {
-      await import(/* webpackChunkName: "webcomponents/vb-header" */'./vb-header');
-      const vbHeader = document.createElement('vb-header');
-      vbHeader.setAttribute('placeholder', browser.i18n.getMessage('placeholder_input_search'));
-      vbHeader.setAttribute('initial-folder-id', settings.$.default_folder_id);
-      vbHeader.setAttribute('folder-id', startFolder());
-      document.querySelector('header').append(vbHeader);
-
-      vbHeader.addEventListener('vb:search', ({ detail }) => {
-        const query = detail.isBookmarksEngine ? detail.search.trim() : '';
-        if (query === searchQuery) return;
-        searchQuery = query;
-        viewRequest++;
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(refresh, query ? 180 : 0);
-      });
-      vbHeader.addEventListener('vb:searchreset', () => {
-        searchQuery = '';
-        refresh();
-      });
-    }
+    await syncToolbar();
 
     // Change the current dial if the page hash changes
     window.addEventListener('hashchange', refresh);
-
-    document.addEventListener('bookmark-removed', ({ detail }) => {
-      // on any action, folder change or bookmark removal (from DOM)
-      // remove the previously created url of the blob object from memory
-      if (!document.getElementById(`vb-${detail.id}`)) {
-        URL.revokeObjectURL(detail.image);
-
-        const thumbnail = THUMBNAILS_MAP.get(detail.id);
-        if (thumbnail) {
-          if (thumbnail.children) {
-            // if there are thumbnails in the children, clear them from memory too
-            thumbnail.children.forEach(item => {
-              if (item.blobUrl) {
-                URL.revokeObjectURL(item.blobUrl);
-              }
-            });
-          }
-          // delete an inaccessible item from Map
-          THUMBNAILS_MAP.delete(detail.id);
-        }
-      }
-    });
 
     browser.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && currentPage && changes[bookmarkOrderKey(currentPage.folderId)] && !organizing) {
@@ -141,6 +99,73 @@ const Bookmarks = (() => {
 
     // Create speeddial
     return refresh();
+  }
+
+  async function installToolbar(header) {
+    await import(/* webpackChunkName: "webcomponents/vb-header" */ './vb-header');
+    toolbar = document.createElement('vb-header');
+    toolbar.setAttribute('placeholder', browser.i18n.getMessage('placeholder_input_search'));
+    toolbar.setAttribute('initial-folder-id', settings.$.default_folder_id);
+    toolbar.setAttribute('folder-id', currentPage?.folderId ?? startFolder());
+
+    toolbar.addEventListener('vb:search', ({ detail }) => {
+      if (!settings.$.show_toolbar) return;
+      const query = detail.isBookmarksEngine ? detail.search.trim() : '';
+      if (query === searchQuery) return;
+      searchQuery = query;
+      viewRequest++;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(refresh, query ? 180 : 0);
+    });
+    toolbar.addEventListener('vb:searchreset', () => {
+      searchQuery = '';
+      refresh();
+    });
+    header.append(toolbar);
+  }
+
+  async function syncToolbar() {
+    const header = document.querySelector('.newtab-toolbar header');
+    const enabled = settings.$.show_toolbar;
+    header.hidden = !enabled;
+    document.body.classList.toggle('hidden-toolbar', !enabled);
+    if (!enabled) {
+      if (searchQuery) {
+        searchQuery = '';
+        viewRequest++;
+        clearTimeout(searchTimer);
+        refreshFromNative();
+      }
+      if (toolbar?.inputNode) {
+        toolbar.inputNode.value = '';
+        toolbar.resetNode?.classList.remove('is-show');
+      }
+      return;
+    }
+    if (!toolbar) {
+      toolbarLoading ||= installToolbar(header).finally(() => {
+        toolbarLoading = null;
+      });
+      await toolbarLoading;
+    }
+    if (!settings.$.show_toolbar || !toolbar?.formNode) return;
+    const selectedEngine = toolbar.engineNodes[toolbar.engineIndex]?.dataset.engine;
+    if (selectedEngine !== settings.$.search_engine) {
+      toolbar.prevEngineIndex = toolbar.engineIndex;
+      toolbar.engine = settings.$.search_engine;
+    }
+    if (settings.$.open_link_newtab && settings.$.search_engine !== 'bookmarks') {
+      toolbar.formNode.target = '_blank';
+    } else {
+      toolbar.formNode.removeAttribute('target');
+    }
+  }
+
+  function syncDragSettings(searching) {
+    const enabled = settings.$.drag_and_drop && !settings.$.sort_by_newest;
+    if (enabled && !container.sortInstance) initDrag(container);
+    const disabled = !enabled || searching;
+    if (container.sortInstance?.isDisabled !== disabled) container.sortInstance?.toggleDisable(disabled);
   }
 
   // helper to turn on the dropzone lighting
@@ -253,30 +278,31 @@ const Bookmarks = (() => {
     return folderId;
   }
 
-  function genBookmark(bookmark) {
-    let image;
-    let custom = false;
-    const thumbnail = THUMBNAILS_MAP.get(bookmark.id);
-    if (thumbnail) {
-      image = thumbnail.blobUrl;
-      custom = thumbnail.custom;
+  function renderBookmark(bookmark, card) {
+    if (!card) {
+      card = document.createElement('a', { is: 'vb-bookmark' });
+      card.id = bookmark.id;
     }
+    if (card.hidden) card.hidden = false;
+    if (card.openNewTab !== settings.$.open_link_newtab) card.openNewTab = settings.$.open_link_newtab;
+    if (card.hasTitle !== settings.$.show_bookmark_title) card.hasTitle = settings.$.show_bookmark_title;
+    if (card.hasFavicon !== settings.$.show_favicon) card.hasFavicon = settings.$.show_favicon;
+    if (card.title !== bookmark.title) card.setAttribute('title', bookmark.title || '');
+    if (card.url !== bookmark.url) card.url = bookmark.url;
+    if (card.parentId !== bookmark.parentId) {
+      card.parentId = bookmark.parentId;
+      card.dataset.parentId = bookmark.parentId;
+    }
+    showBookmarkImage(card);
+    return card;
+  }
 
-    const vbBookmark = document.createElement('a', { is: 'vb-bookmark' });
-    Object.assign(vbBookmark, {
-      id: bookmark.id,
-      url: bookmark.url,
-      title: bookmark.title,
-      parentId: bookmark.parentId,
-      image,
-      isCustomImage: custom,
-      externalLogo: settings.$.logo_external ? settings.$.logo_external_url : null,
-      openNewTab: settings.$.open_link_newtab,
-      hasTitle: settings.$.show_bookmark_title,
-      hasFavicon: settings.$.show_favicon
-    });
-    vbBookmark.dataset.parentId = bookmark.parentId;
-    return vbBookmark;
+  function showBookmarkImage(card) {
+    const thumbnail = THUMBNAILS_MAP.get(card.id);
+    const image = thumbnail?.blobUrl;
+    const custom = !!thumbnail?.custom;
+    if (card.isCustomImage !== custom) card.isCustomImage = custom;
+    if (card.image !== image && (card.image || image)) card.image = image;
   }
 
   async function readFolder(requestedId) {
@@ -383,19 +409,20 @@ const Bookmarks = (() => {
     const expected = [...before];
     for (const { id, from, to, insertion } of plan) {
       const actual = (await getChildren(folderId)).map(node => node.id);
-      if (!sameOrder(expected, actual)) return { synchronized: false, ids: null };
+      if (!sameOrder(expected, actual)) return { synchronized: false, ids: null, failed: true };
       try {
         const moved = await move(id, { parentId: folderId, index: insertion });
-        if (moved.parentId !== folderId || moved.index !== to) return { synchronized: false, ids: null };
+        if (moved.parentId !== folderId || moved.index !== to) return { synchronized: false, ids: null, failed: true };
       } catch (error) {
         console.warn(error);
-        return { synchronized: false, ids: expected };
+        return { synchronized: false, ids: expected, failed: true };
       }
       expected.splice(from, 1);
       expected.splice(to, 0, id);
     }
     const actual = (await getChildren(folderId)).map(node => node.id);
-    return { synchronized: sameOrder(expected, actual), ids: sameOrder(expected, actual) ? expected : null };
+    const synchronized = sameOrder(expected, actual);
+    return { synchronized, ids: synchronized ? expected : null, failed: !synchronized };
   }
 
   async function undoOrdering(folderId, previous, next, native) {
@@ -439,7 +466,7 @@ const Bookmarks = (() => {
         await writeOrderRecord(folderId, next);
 
         let native;
-        let synchronized = false;
+        let nativeFailed = false;
         if (process.env.BROWSER !== 'firefox' && sameOrder(original, links.map(node => node.id))
           && selected.every(id => !byId.get(id).unmodifiable)) {
           const priorNative = children.map(node => node.id);
@@ -449,23 +476,25 @@ const Bookmarks = (() => {
             .filter(node => !byId.has(node.id) || node.unmodifiable).map(node => node.id));
           try {
             const sync = await applyNativeOrder(folderId, priorNative, desiredNative, selected, barriers);
-            synchronized = sync.synchronized;
+            nativeFailed = !!sync.failed;
             if (sync.ids && !sameOrder(priorNative, sync.ids)) {
               native = { before: priorNative, after: sync.ids, selected, barriers };
             }
           } catch (error) {
             console.warn(error);
+            nativeFailed = true;
           }
         }
-        return { folderId, previous, next, native, synchronized };
+        return { folderId, previous, next, native, nativeFailed };
       });
       await refresh();
       if (!result) return false;
       $customTrigger('updateFolderList', document);
-      const message = result.synchronized
-        ? text('手动顺序已保存并同步到浏览器收藏夹。', 'Manual order saved and reflected in browser favorites.')
-        : text('已保存此文件夹的手动显示顺序。', 'Manual display order saved for this folder.');
-      showOrganizationUndo(message, () => undoOrdering(result.folderId, result.previous, result.next, result.native));
+      rememberOrderUndo(() => undoOrdering(result.folderId, result.previous, result.next, result.native));
+      if (result.nativeFailed) {
+        Toast.show(text('未能同步浏览器收藏夹，插件内的手动顺序已保留。',
+          'Browser favorites could not be reordered. The manual order is kept in the extension.'));
+      }
       return true;
     } catch (error) {
       console.warn(error);
@@ -489,8 +518,7 @@ const Bookmarks = (() => {
       });
       if (!previous) return false;
       await refresh();
-      showOrganizationUndo(text('已恢复常用优先。', 'Most used order restored.'),
-        () => undoOrdering(view.folderId, previous, next));
+      rememberOrderUndo(() => undoOrdering(view.folderId, previous, next));
       return true;
     } catch (error) {
       console.warn(error);
@@ -499,69 +527,178 @@ const Bookmarks = (() => {
     }
   }
 
-  function bookmarkFragment(items, thumbnails) {
-    const visible = items.filter(item => !Object.hasOwn(bookmarksToDelete, item.id));
-    const visibleIds = new Set(visible.map(item => item.id));
-    for (const thumbnail of thumbnails) {
-      if (visibleIds.has(thumbnail.id) && thumbnail.blob instanceof Blob) {
-        THUMBNAILS_MAP.set(thumbnail.id, {
-          ...thumbnail,
-          blobUrl: URL.createObjectURL(thumbnail.blob)
-        });
-      }
-    }
-    const fragment = document.createDocumentFragment();
-    for (const item of visible) fragment.append(genBookmark(item));
-    return fragment;
+  function readThumbnails(items) {
+    return ImageDB.readBookmarkPreviews(items)
+      .then(({ records, hiddenIds, complete }) => ({
+        byId: new Map(records.map(record => [record.id, record])), hiddenIds, complete
+      }))
+      .catch(() => null);
   }
 
-  function addPageControl(page) {
-    pageObserver?.disconnect();
-    if (!hasMoreBookmarks()) return;
-
-    const button = $createElement('button', {
-      type: 'button', class: 'btn bookmarks-load-more'
-    }, browser.i18n.getMessage('load_more_bookmarks'));
-    button.style.gridColumn = '1 / -1';
-    const load = async() => {
-      if (button.disabled || page.request !== viewRequest) return;
-      button.disabled = true;
-      const items = page.items.slice(page.offset, page.offset + PAGE_SIZE);
-      try {
-        const thumbnails = await ImageDB.getForBookmarks(items).catch(() => []);
-        if (page.request !== viewRequest) return;
-        const fragment = bookmarkFragment(items, thumbnails);
-        const first = fragment.firstElementChild;
-        button.before(fragment);
-        page.offset += items.length;
-        if (document.activeElement === button) first?.focus();
-        if (!hasMoreBookmarks()) {
-          pageObserver?.disconnect();
-          button.remove();
-        }
-      } finally {
-        button.disabled = false;
+  function refreshMedia(bookmark, card, thumbnails) {
+    const thumbnail = thumbnails?.byId.get(bookmark.id);
+    const current = THUMBNAILS_MAP.get(bookmark.id);
+    if (thumbnails?.hiddenIds.has(bookmark.id)) {
+      if (current?.blobUrl) URL.revokeObjectURL(current.blobUrl);
+      THUMBNAILS_MAP.set(bookmark.id, { source: 'bookmark' });
+      return;
+    }
+    if (!thumbnails?.complete && current && card?.url === bookmark.url
+      && !thumbnail?.custom && current.source !== thumbnail?.source) return;
+    if (thumbnail?.blob instanceof Blob) {
+      const key = JSON.stringify([thumbnail.revision, thumbnail.custom, thumbnail.blob.type, thumbnail.blob.size]);
+      if (current?.key === key) {
+        current.source = thumbnail.source;
+        return;
       }
-    };
-    button.addEventListener('click', load);
-    container.append(button);
-    if (typeof IntersectionObserver === 'function') {
+      THUMBNAILS_MAP.set(bookmark.id, {
+        key, custom: thumbnail.custom, source: thumbnail.source, blobUrl: URL.createObjectURL(thumbnail.blob)
+      });
+    } else {
+      THUMBNAILS_MAP.delete(bookmark.id);
+    }
+    if (current?.blobUrl) URL.revokeObjectURL(current.blobUrl);
+  }
+
+  function buildCards(items, thumbnails, existing = new Map()) {
+    const cards = [];
+    for (const item of items) {
+      if (Object.hasOwn(bookmarksToDelete, item.id)) continue;
+      const card = existing.get(item.id);
+      refreshMedia(item, card, thumbnails);
+      cards.push(renderBookmark(item, card));
+    }
+    return cards;
+  }
+
+  async function refreshVisiblePreviews() {
+    const page = currentPage;
+    if (!page) return;
+    const request = ++previewRead;
+    const cards = [...container.querySelectorAll(':scope > .bookmark:not([hidden])')];
+    const items = cards.map(card => ({ id: card.id, url: card.url }));
+    const thumbnails = await readThumbnails(items);
+    if (request !== previewRead || page !== currentPage || !thumbnails) return;
+    cards.forEach((card, index) => {
+      const item = items[index];
+      if (!container.contains(card) || card.hidden || card.url !== item.url) return;
+      refreshMedia(item, card, thumbnails);
+      showBookmarkImage(card);
+    });
+  }
+
+  function trimMedia(cards) {
+    const used = new Set(cards.map(card => card.id));
+    for (const [id, record] of THUMBNAILS_MAP) {
+      if (!used.has(id)) {
+        if (record.blobUrl) URL.revokeObjectURL(record.blobUrl);
+        THUMBNAILS_MAP.delete(id);
+      }
+    }
+  }
+
+  async function loadMore() {
+    const page = currentPage;
+    if (!page || !pageControl?.isConnected || pageControl.disabled || page.request !== viewRequest) return;
+    pageControl.disabled = true;
+    const items = page.items.slice(page.offset, page.offset + PAGE_SIZE);
+    try {
+      const thumbnails = await readThumbnails(items);
+      if (page.request !== viewRequest) return;
+      const focused = document.activeElement === pageControl;
+      const cards = buildCards(items, thumbnails);
+      pageControl.before(...cards);
+      page.offset += items.length;
+      if (focused) cards[0]?.focus();
+      if (!hasMoreBookmarks()) {
+        pageControl.remove();
+        pageObserver?.disconnect();
+        pageObserver = null;
+      }
+    } finally {
+      pageControl.disabled = false;
+      if (currentPage !== page && pageControl.isConnected && pageObserver) {
+        pageObserver.unobserve(pageControl);
+        pageObserver.observe(pageControl);
+      }
+    }
+  }
+
+  function getPageControl() {
+    if (!pageControl) {
+      pageControl = $createElement('button', {
+        type: 'button', class: 'btn bookmarks-load-more'
+      }, browser.i18n.getMessage('load_more_bookmarks'));
+      pageControl.addEventListener('click', loadMore);
+    }
+    return pageControl;
+  }
+
+  function updatePageObserver() {
+    if (!hasMoreBookmarks()) {
+      pageObserver?.disconnect();
+      pageObserver = null;
+    } else if (!pageObserver && typeof IntersectionObserver === 'function') {
       pageObserver = new IntersectionObserver(entries => {
-        if (entries.some(entry => entry.isIntersecting)) load();
+        if (entries.some(entry => entry.isIntersecting)) loadMore();
       }, { rootMargin: '160px' });
-      pageObserver.observe(button);
+      pageObserver.observe(pageControl);
     }
   }
 
-  async function refresh() {
+  function backButton() {
+    const parentId = container.dataset.parentFolder;
+    if (!window.location.hash || !parentId || !settings.$.show_back_column) return null;
+    const existing = container.querySelector('#bookmark-back');
+    if (existing?.firstElementChild.dataset.id === parentId) return existing;
+    return $createElement('button', {
+      id: 'bookmark-back',
+      class: 'bookmark-btn bookmark-btn--back md-ripple',
+      'aria-label': browser.i18n.getMessage('parent_folder')
+    }, $createElement('span', { class: DROPZONE_SELECTOR.slice(1), 'data-id': parentId }));
+  }
+
+  function showGrid(items, thumbnails, sameScope) {
+    const existing = new Map([...container.children].filter(node => node.matches('.bookmark[data-id]'))
+      .map(card => [card.id, card]));
+    const focused = container.contains(document.activeElement) ? document.activeElement : null;
+    const selected = [...existing.values()].filter(card => card.hasAttribute('data-selected'));
+    let selectionChanged = !sameScope;
+    if (sameScope && selected.length) {
+      const incoming = new Map(items.map(item => [item.id, item]));
+      selectionChanged = selected.some(card => {
+        const item = incoming.get(card.id);
+        return !item || Object.hasOwn(bookmarksToDelete, card.id)
+          || card.title !== (item.title || '') || card.url !== item.url || card.parentId !== item.parentId;
+      });
+    }
+    if (selectionChanged) $customTrigger('vb-bookmarks-panel:close', document);
+
+    const cards = buildCards(items, thumbnails, existing);
+    const back = backButton();
+    const children = back ? [back, ...cards] : [...cards];
+    if (!cards.length) {
+      const empty = container.querySelector('.empty-search')
+        || $createElement('div', { class: 'empty-search' }, browser.i18n.getMessage('empty_search'));
+      children.push(empty);
+    }
+    if (hasMoreBookmarks()) children.push(getPageControl());
+    reconcileChildren(container, children);
+    trimMedia(cards);
+    updatePageObserver();
+    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  }
+
+  async function refresh({ passive = false } = {}) {
     if (organizing) return;
     clearTimeout(searchTimer);
     const request = ++viewRequest;
     const requestedId = startFolder();
     const query = searchQuery;
     const searching = query.length > 0;
-    dialLoading.hidden = false;
-    container.setAttribute('aria-busy', 'true');
+    dialLoading.hidden = !!currentPage;
+    const sameRequestedScope = currentPage?.folderId === requestedId && currentPage.query === query;
+    if (!passive || !sameRequestedScope) container.setAttribute('aria-busy', 'true');
 
     try {
       const [folder, matches, usage] = await Promise.all([
@@ -592,53 +729,34 @@ const Bookmarks = (() => {
         visible.sort((a, b) => count(b) - count(a));
       }
 
-      const limit = currentPage?.folderId === folder.id && currentPage.query === query
-        ? Math.max(currentPage.offset, PAGE_SIZE)
-        : PAGE_SIZE;
-      const initialItems = visible.slice(0, limit);
-      const thumbnails = await ImageDB.getForBookmarks(initialItems).catch(() => []);
+      const sameScope = currentPage?.folderId === folder.id && currentPage.query === query;
+      const initialItems = visible.slice(0, sameScope ? Math.max(currentPage.offset, PAGE_SIZE) : PAGE_SIZE);
+      const thumbnails = await readThumbnails(initialItems);
       if (request !== viewRequest) return;
-      currentPage = { request, items: visible, offset: initialItems.length, folderId: folder.id, query, order };
+      if (passive && sameScope && container.classList.contains('has-dragging')) {
+        refreshFromNative();
+        return;
+      }
+      const announceOrder = currentPage?.folderId !== folder.id || currentPage?.sort !== sort;
+      currentPage = { request, items: visible, offset: initialItems.length, folderId: folder.id, query, order, sort };
       container.dataset.orderMode = sort;
-      $customTrigger('bookmark-order-mode', container, {
-        detail: { folderId: folder.id, mode: sort },
-        bubbles: true
-      });
-
-      $customTrigger('vb-bookmarks-panel:close', document);
-      if (container.sortInstance?.isDisabled !== searching) {
-        container.sortInstance?.toggleDisable(searching);
+      if (announceOrder) {
+        $customTrigger('bookmark-order-mode', container, {
+          detail: { folderId: folder.id, mode: sort },
+          bubbles: true
+        });
       }
-      for (const thumbnail of THUMBNAILS_MAP.values()) {
-        URL.revokeObjectURL(thumbnail.blobUrl);
-      }
-      THUMBNAILS_MAP.clear();
+      syncDragSettings(searching);
       applyFolder(folder, requestedId, searching);
       document.body.classList.toggle('has-search', searching);
-      const fragment = document.createDocumentFragment();
-      const parentId = container.dataset.parentFolder;
-      if (window.location.hash && parentId && settings.$.show_back_column) {
-        fragment.append($createElement('button', {
-          id: 'bookmark-back',
-          class: 'bookmark-btn bookmark-btn--back md-ripple',
-          'aria-label': browser.i18n.getMessage('parent_folder')
-        }, $createElement('span', {
-          class: DROPZONE_SELECTOR.replace('.', ''),
-          'data-id': parentId
-        })));
-      }
-      const cards = bookmarkFragment(initialItems, thumbnails);
-      if (cards.childElementCount) fragment.append(cards);
-      else {
-        fragment.append($createElement('div', { class: 'empty-search' }, browser.i18n.getMessage('empty_search')));
-      }
-      container.replaceChildren(fragment);
-      addPageControl(currentPage);
+      showGrid(initialItems, thumbnails, sameScope);
     } catch (error) {
       if (request !== viewRequest) return;
       console.warn(error);
       pageObserver?.disconnect();
+      pageObserver = null;
       currentPage = null;
+      trimMedia([]);
       $customTrigger('vb-bookmarks-panel:close', document);
       container.replaceChildren($createElement('div', { class: 'not-found' },
         $createElement('p', { class: 'not-found__text' }, browser.i18n.getMessage('not_found_text'))));
@@ -656,7 +774,7 @@ const Bookmarks = (() => {
       nativeRefreshTimer = setTimeout(refreshFromNative, 80);
       return;
     }
-    refresh();
+    refresh({ passive: true });
   }
 
   /**
@@ -711,43 +829,72 @@ const Bookmarks = (() => {
   async function captureMultipleBookmarks(bookmarks) {
     if (isGeneratedThumbs) return;
     const candidates = new Map();
+    const result = { updated: 0, unchanged: 0, protected: 0, failed: 0, stopped: false };
+    const chinese = document.documentElement.lang.startsWith('zh');
     for (const { id, url } of bookmarks) {
-      if (/^https?:\/\//i.test(url || '')) candidates.set(id, { id, url });
+      if (id && /^https?:\/\//i.test(url || '')) candidates.set(id, { id, url });
     }
-    if (!candidates.size) return;
+    if (!candidates.size) {
+      Toast.show(chinese ? '当前没有可更新缩略图的网页书签。' : 'There are no webpage bookmarks to update.');
+      return result;
+    }
 
     isGeneratedThumbs = true;
     $customTrigger('thumbnails:updating', container);
     let progressToast;
-    let failed = false;
+    let captures;
     try {
+      // Read custom covers for the complete folder, including cards outside the current page.
       const protectedImages = await ImageDB.getForBookmarks([...candidates.values()]);
       for (const image of protectedImages) {
-        if (image.custom) candidates.delete(image.id);
+        if (image.custom && candidates.delete(image.id)) result.protected++;
       }
-      if (!candidates.size) return;
+      const uniqueUrls = new Map([...candidates.values()].map(bookmark => [bookmark.url, bookmark]));
+      if (!uniqueUrls.size) return result;
 
-      progressToast = renderProgressToast(candidates.size);
+      captures = openPreviewCapture();
+      progressToast = renderProgressToast(uniqueUrls.size);
+      const cancel = $createElement('button', { type: 'button', class: 'btn btn--clear progress-toast__cancel' },
+        chinese ? '停止' : 'Stop');
+      cancel.addEventListener('click', () => {
+        result.stopped = true;
+        cancel.disabled = true;
+        captures.close();
+      });
+      progressToast.append(cancel);
       document.body.append(progressToast);
       const progressText = progressToast.querySelector('#progress-text');
       let index = 0;
-      for (const bookmark of candidates.values()) {
+      for (const bookmark of uniqueUrls.values()) {
+        if (result.stopped) break;
         if (progressText) progressText.textContent = ++index;
-        const success = await captureScreen(bookmark.url, bookmark.id);
-        if (!success) failed = true;
+        const status = await captures.capture(bookmark);
+        if (status === 'stopped') {
+          result.stopped = true;
+          break;
+        }
+        result[status]++;
       }
     } catch (error) {
-      failed = true;
+      result.failed++;
       console.warn(error);
     } finally {
+      captures?.close();
       progressToast?.remove();
       isGeneratedThumbs = false;
       $customTrigger('thumbnails:updated', container);
-      if (failed) {
-        Toast.show(browser.i18n.getMessage('notice_screenshot_failed') || 'Some screenshots could not be saved.');
-      }
+      const parts = chinese
+        ? [result.stopped && '已停止', result.updated && `更新 ${result.updated} 个网址`,
+          result.unchanged && `${result.unchanged} 个网址画面未变化`,
+          result.protected && `保留 ${result.protected} 个自定义封面`, result.failed && `失败 ${result.failed} 个网址`]
+        : [result.stopped && 'Stopped', result.updated && `Updated ${result.updated} URLs`,
+          result.unchanged && `${result.unchanged} unchanged`,
+          result.protected && `${result.protected} custom covers kept`, result.failed && `${result.failed} failed`];
+      const message = parts.filter(Boolean).join(chinese ? '，' : ', ');
+      if (message) Toast.show({ message, delay: 6000 });
       refresh();
     }
+    return result;
   }
 
   async function autoUpdateThumb() {
@@ -758,11 +905,16 @@ const Bookmarks = (() => {
       const bookmarks = settings.$.thumbnails_update_recursive
         ? flattenArrayBookmarks(folder.children)
         : folder.children;
-      await captureMultipleBookmarks(bookmarks);
+      return await captureMultipleBookmarks(bookmarks);
     } catch (error) {
       console.warn(error);
       showOperationFailure();
     }
+  }
+
+  async function refreshCurrentThumbnails() {
+    if (isGeneratedThumbs || !await checkHostPermissions()) return;
+    return autoUpdateThumb();
   }
 
   async function updateSelectedThumbnails(selectedBookmarks) {
@@ -877,7 +1029,7 @@ const Bookmarks = (() => {
     try {
       const { id } = bookmark;
       const blob = await $resizeThumbnail(fileBlob);
-      const saved = await ImageDB.update({ id, blob, custom: true });
+      const saved = await ImageDB.update({ id, blob, custom: true, revision: crypto.randomUUID() });
       if (saved === undefined) throw new Error('Could not save custom image');
       Toast.show(browser.i18n.getMessage('notice_thumb_image_updated'));
       await refresh();
@@ -889,27 +1041,48 @@ const Bookmarks = (() => {
     }
   }
 
-  function captureScreen(captureUrl, id) {
-    return new Promise(resolve => {
-      const timeout = setTimeout(() => resolve(false), 40000);
-      const finish = success => {
-        clearTimeout(timeout);
-        resolve(success);
-      };
-      try {
-        browser.runtime.sendMessage({ capture: { id, captureUrl } }, response => {
-          if (browser.runtime.lastError) return finish(false);
-          finish(response === 'success' || response?.ok === true);
-        });
-      } catch {
-        finish(false);
-      }
-    });
-  }
-
   async function createScreen(bookmark) {
-    if (bookmark?.isConnected && await checkHostPermissions()) {
-      await captureMultipleBookmarks([bookmark]);
+    if (!bookmark?.isConnected || bookmark.hidden || !/^https?:\/\//i.test(bookmark.url || '')) return;
+    const { id, url } = bookmark;
+    const notify = key => Toast.show(browser.i18n.getMessage(key));
+    if (THUMBNAILS_MAP.get(id)?.custom) {
+      notify('notice_thumb_custom_kept');
+      return;
+    }
+    if (isGeneratedThumbs) {
+      notify('notice_thumb_busy');
+      return;
+    }
+
+    isGeneratedThumbs = true;
+    if (bookmark.contains(document.activeElement)) bookmark.focus({ preventScroll: true });
+    bookmark.setAttribute('aria-busy', 'true');
+    bookmark.hasOverlay = true;
+    $customTrigger('thumbnails:updating', container);
+    let capture;
+    try {
+      if (!await checkHostPermissions()) return;
+      capture = openPreviewCapture();
+      const status = await capture.capture({ id, url, mode: 'single' });
+      if (status === 'updated') {
+        await refreshVisiblePreviews();
+        notify('notice_thumb_image_updated');
+      } else if (status === 'unchanged') {
+        notify('notice_thumb_unchanged');
+      } else if (status === 'protected') {
+        notify('notice_thumb_custom_kept');
+      } else {
+        notify('notice_thumb_capture_failed');
+      }
+    } catch (error) {
+      console.warn(error);
+      notify('notice_thumb_capture_failed');
+    } finally {
+      capture?.close();
+      bookmark.hasOverlay = false;
+      bookmark.removeAttribute('aria-busy');
+      isGeneratedThumbs = false;
+      $customTrigger('thumbnails:updated', container);
     }
   }
 
@@ -993,14 +1166,18 @@ const Bookmarks = (() => {
     queueBookmarkDeletion([{ id: bookmark.dataset.id, isFolder, element: bookmark }], message);
   }
 
-  async function removeThumbnail(id, previewUrl) {
+  async function removeThumbnail(id) {
     try {
-      await ImageDB.delete(id);
-      if (previewUrl) await ImageDB.deleteVisitPreview(previewUrl);
+      const [bookmark] = await browser.bookmarks.get(id);
+      if (bookmark?.url) await ImageDB.clearBookmarkPreview(id, bookmark.url);
+      else await ImageDB.delete(id);
       await refresh();
+      browser.runtime.sendMessage({ visitPreviewUpdated: true }).catch(() => undefined);
+      return true;
     } catch (error) {
       console.warn(error);
       showOperationFailure();
+      return false;
     }
   }
 
@@ -1029,8 +1206,10 @@ const Bookmarks = (() => {
 
   return {
     init,
+    syncToolbar,
     refresh,
     refreshFromNative,
+    refreshVisiblePreviews,
     createBookmark,
     updateBookmark,
     removeFromBrowser,
@@ -1040,6 +1219,7 @@ const Bookmarks = (() => {
     uploadScreen,
     removeThumbnail,
     autoUpdateThumb,
+    refreshCurrentThumbnails,
     updateSelectedThumbnails,
     moveSelectedBookmarks,
     moveBookmarks,

@@ -56,6 +56,8 @@ describe('Chromium real-bookmark dock workflow', () => {
     extPage = context.extPage;
     browser = context.browser;
     extPage.on('pageerror', error => pageErrors.push(error.message));
+    // The drag assertions below measure the regular-motion experience on any Windows runner.
+    await extPage.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
     await extPage.setViewport({ width: 1440, height: 900 });
 
     data = await extPage.evaluate(async(prefix) => {
@@ -149,12 +151,160 @@ describe('Chromium real-bookmark dock workflow', () => {
     await loadAllBookmarks(240);
   });
 
-  it('reorders a large folder without disturbing nested folders and restores it with undo', async() => {
+  it('shows cached previews when returning to a visible tab, including legacy images', async() => {
+    await openFolder(data.sourceId);
+    const [legacyId, visitedId, customId] = data.bookmarkIds.slice(8, 11);
+    const otherTab = await browser.newPage();
+    try {
+      await otherTab.bringToFront();
+      await extPage.waitForFunction(() => document.hidden, { polling: 100 });
+      await extPage.evaluate(async({ legacyId, visitedId, customId }) => {
+        const legacyCard = document.getElementById('vb-' + legacyId);
+        const visitedCard = document.getElementById('vb-' + visitedId);
+        const customCard = document.getElementById('vb-' + customId);
+        Object.defineProperty(document, 'hasFocus', { value: () => false, configurable: true });
+        const canvas = document.createElement('canvas');
+        canvas.width = 44;
+        canvas.height = 30;
+        canvas.getContext('2d').fillRect(0, 0, canvas.width, canvas.height);
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        function seed(name, store, record) {
+          return new Promise((resolve, reject) => {
+            const open = indexedDB.open(name);
+            open.onerror = () => reject(open.error);
+            open.onsuccess = () => {
+              const db = open.result;
+              const tx = db.transaction(store, 'readwrite');
+              tx.objectStore(store).put(record);
+              tx.oncomplete = () => { db.close(); resolve(); };
+              tx.onabort = () => { db.close(); reject(tx.error); };
+            };
+          });
+        }
+        window.returnPreviewFixture = { legacyCard, visitedCard, customCard, seed };
+        // Simulate existing extension storage with no live worker notification.
+        await seed('visual-bookmarks', 'images', { id: legacyId, blob, custom: false });
+        await seed('visual-bookmarks', 'images', { id: customId, blob, custom: true });
+        await seed('visual-bookmarks-visit-previews', 'visitPreviews', {
+          url: visitedCard.url, blob, updated: Date.now()
+        });
+      }, { legacyId, visitedId, customId });
+      await extPage.bringToFront();
+      await extPage.waitForFunction(() => {
+        const { legacyCard, visitedCard, customCard } = window.returnPreviewFixture;
+        return !document.hidden && !document.hasFocus() && [legacyCard, visitedCard, customCard].every(card => {
+          const screenshot = card.querySelector('.bookmark__screenshot.is-ready');
+          return card.isConnected && screenshot?.querySelector('img')?.naturalWidth === 44
+            && getComputedStyle(screenshot).opacity === '1';
+        });
+      }, { timeout: 5000 });
+
+      await otherTab.bringToFront();
+      await extPage.waitForFunction(() => document.hidden, { polling: 100 });
+      await extPage.evaluate(async() => {
+        const fixture = window.returnPreviewFixture;
+        fixture.cover = fixture.customCard.querySelector('.bookmark__img--contain img');
+        fixture.coverSrc = fixture.cover.src;
+        const canvas = document.createElement('canvas');
+        canvas.width = 48;
+        canvas.height = 36;
+        canvas.getContext('2d').fillRect(0, 0, canvas.width, canvas.height);
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        for (const card of [fixture.visitedCard, fixture.customCard]) {
+          await fixture.seed('visual-bookmarks-visit-previews', 'visitPreviews', {
+            url: card.url, blob, updated: Date.now()
+          });
+        }
+        const transaction = IDBDatabase.prototype.transaction;
+        fixture.restoreImageRead = () => { IDBDatabase.prototype.transaction = transaction; };
+        IDBDatabase.prototype.transaction = function(store, ...args) {
+          if (this.name === 'visual-bookmarks' && store === 'images') {
+            throw new DOMException('Fixture cover store unavailable');
+          }
+          return transaction.call(this, store, ...args);
+        };
+      });
+      await extPage.bringToFront();
+      await extPage.waitForFunction(() => {
+        const { visitedCard } = window.returnPreviewFixture;
+        return visitedCard.querySelector('.bookmark__screenshot.is-ready img')?.naturalWidth === 48;
+      }, { timeout: 5000 });
+      expect(await extPage.evaluate(() => {
+        const { customCard, cover, coverSrc } = window.returnPreviewFixture;
+        return customCard.querySelector('.bookmark__img--contain img') === cover
+          && cover.src === coverSrc && cover.naturalWidth === 44;
+      })).toBe(true);
+
+      const legacyTab = await browser.newPage();
+      try {
+        await legacyTab.evaluateOnNewDocument(() => {
+          const open = IDBFactory.prototype.open;
+          IDBFactory.prototype.open = function(name, ...args) {
+            if (name === 'visual-bookmarks-visit-previews') throw new DOMException('Fixture cache unavailable');
+            return open.call(this, name, ...args);
+          };
+        });
+        await legacyTab.goto(extPage.url());
+        await legacyTab.waitForFunction(id =>
+          document.querySelector(`#vb-${id} .bookmark__screenshot.is-ready img`)?.naturalWidth === 44,
+        { timeout: 5000 }, legacyId);
+      } finally {
+        await legacyTab.close();
+      }
+    } finally {
+      await extPage.evaluate(() => {
+        window.returnPreviewFixture?.restoreImageRead?.();
+        delete document.hasFocus;
+        delete window.returnPreviewFixture;
+      });
+      await otherTab.close();
+      await extPage.bringToFront();
+    }
+  });
+
+  it('reorders and undoes a large folder without replacing live cards or their media', async() => {
     // Reload to start with only the first page rendered.
     await extPage.reload({ waitUntil: 'load' });
     const [first, second, third] = data.bookmarkIds;
     await openFolder(data.sourceId);
     await extPage.waitForFunction(id => document.querySelector('#bookmarks .bookmark')?.dataset.id === id, {}, first);
+    await extPage.evaluate(async id => {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('visual-bookmarks');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = 120;
+      canvas.height = 80;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#5a80b5';
+      ctx.fillRect(0, 0, 120, 80);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const tx = db.transaction('images', 'readwrite');
+      await new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+        tx.objectStore('images').put({ id, blob, custom: true, revision: 'reorder-test' });
+      });
+      db.close();
+      const [bookmark] = await browser.bookmarks.get(id);
+      await browser.bookmarks.update(id, { title: bookmark.title + ' ' });
+    }, first);
+    await extPage.waitForSelector(`#vb-${first} .bookmark__screenshot.is-ready img`);
+    await extPage.evaluate(({ first, folderId }) => {
+      const grid = document.getElementById('bookmarks');
+      // Also exercise the fallback for Chromium builds without Element.moveBefore().
+      Object.defineProperty(grid, 'moveBefore', { value: undefined, configurable: true });
+      const folder = document.querySelector('[data-folder-id="' + folderId + '"]');
+      window.sortCheck = {
+        rows: [...grid.querySelectorAll('.bookmark')],
+        icons: [...grid.querySelectorAll('.site-icon__image')],
+        folder, miniIcons: [...folder.querySelectorAll('.site-icon__image')],
+        preview: document.querySelector('#vb-' + first + ' .bookmark__screenshot img'),
+        toasts: [...document.querySelectorAll('.toast')]
+      };
+    }, { first, folderId: data.sourceId });
     const original = await extPage.evaluate(async id => (await browser.bookmarks.getChildren(id)).map(node => node.id), data.sourceId);
     await dragCard(`#bookmarks [data-id="${first}"]`, `#bookmarks [data-id="${third}"]`, 0.84);
     await extPage.waitForFunction(({ first, second, third }) => {
@@ -169,16 +319,29 @@ describe('Chromium real-bookmark dock workflow', () => {
     expect(reordered.filter(id => ![first, second, third].includes(id))).toEqual(
       original.filter(id => ![first, second, third].includes(id))
     );
-    const undo = await extPage.waitForSelector('.toast__action[data-action]', { visible: true, timeout: 5000 });
-    await extPage.waitForFunction(button => {
-      const rect = button.getBoundingClientRect();
-      return getComputedStyle(button.closest('.toast')).transform === 'none'
-        && button.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
-    }, { timeout: 4000 }, undo);
-    await undo.click();
+    const retained = await extPage.evaluate(first => {
+      const { rows, icons, folder, miniIcons, preview, toasts } = window.sortCheck;
+      const current = document.querySelector('#vb-' + first + ' .bookmark__screenshot img');
+      return rows.every(node => node.isConnected) && icons.every(node => node.isConnected)
+        && folder.isConnected && miniIcons.every(node => node.isConnected)
+        && current === preview && current.complete && current.naturalWidth > 0
+        && [...document.querySelectorAll('.toast')].every(node => toasts.includes(node));
+    }, first);
+    expect(retained).toBe(true);
+    await extPage.focus('#bookmarkSearch');
+    await extPage.keyboard.down('Control');
+    await extPage.keyboard.press('z');
+    await extPage.keyboard.up('Control');
+    expect(await extPage.$eval('#bookmarks .bookmark', card => card.dataset.id)).toBe(second);
+    await extPage.click('#newtabActionsToggle');
+    await extPage.click('[data-newtab-action="undo-order"]');
     await extPage.waitForFunction(id => document.querySelector('#bookmarks .bookmark')?.dataset.id === id, { timeout: 5000 }, first)
       .catch(error => { throw new Error('Undo did not restore the original first bookmark. ' + error); });
     expect(await extPage.evaluate(async id => (await browser.bookmarks.getChildren(id)).map(node => node.id), data.sourceId)).toEqual(original);
+    await extPage.evaluate(() => {
+      delete document.getElementById('bookmarks').moveBefore;
+      delete window.sortCheck;
+    });
   });
 
   it('keeps sharp uniform icons, previews and text in separate zones at high DPI', async() => {
@@ -188,7 +351,7 @@ describe('Chromium real-bookmark dock workflow', () => {
       const card = document.createElement('a', { is: 'vb-bookmark' });
       Object.assign(card, { id: 'quality-fixture', url: 'https://example.com/private?token=do-not-send',
         title: 'A long bookmark title for checking icon and label separation', hasTitle: true,
-        image, isCustomImage: true });
+        image, isCustomImage: true, hasFavicon: true });
       const host = document.createElement('div');
       host.id = 'quality-fixture-host';
       host.style.cssText = 'position:fixed;top:100px;right:40px;width:clamp(100px,12vw,180px);z-index:9999';
@@ -240,6 +403,48 @@ describe('Chromium real-bookmark dock workflow', () => {
     }
   });
 
+  it('applies toolbar, caption, icon, navigation and drag settings without remounting cards', async() => {
+    const first = data.bookmarkIds[0];
+    const settings = await extPage.evaluate(async({ first, source }) => {
+      const initial = (await browser.storage.local.get('settings')).settings;
+      const card = document.getElementById('vb-' + first);
+      window.settingCardCheck = {
+        card,
+        toolbar: document.querySelector('vb-header'),
+        logo: card.querySelector('.site-icon__image'),
+        preview: card.querySelector('.bookmark__screenshot img'),
+        mini: document.querySelector('[data-folder-id="' + source + '"] .site-icon__image')
+      };
+      await browser.storage.local.set({ settings: { ...initial, show_toolbar: false,
+        show_bookmark_title: false, show_favicon: false, open_link_newtab: false, drag_and_drop: false } });
+      return initial;
+    }, { first, source: data.sourceId });
+    try {
+      await extPage.waitForFunction(first => {
+        const card = document.getElementById('vb-' + first);
+        return !card.hasAttribute('target') && !card.querySelector('.bookmark__title')
+          && getComputedStyle(card.querySelector('.bookmark__img--base')).display === 'none'
+          && document.querySelector('.newtab-toolbar header').hidden
+          && document.getElementById('bookmarks').sortInstance.isDisabled;
+      }, {}, first);
+      expect(await extPage.evaluate(() => {
+        const { card, logo, preview, mini } = window.settingCardCheck;
+        return card.isConnected && logo.isConnected && preview.isConnected && mini.isConnected;
+      })).toBe(true);
+    } finally {
+      await extPage.evaluate(settings => browser.storage.local.set({ settings }), settings);
+    }
+    await extPage.waitForFunction(first => {
+      const { card, toolbar } = window.settingCardCheck;
+      return card === document.getElementById('vb-' + first) && card.querySelector('.bookmark__title')
+        && !card.querySelector('.bookmark__img--base').hidden && card.target === '_blank'
+        && !document.querySelector('.newtab-toolbar header').hidden
+        && document.querySelectorAll('vb-header').length === 1
+        && document.querySelector('vb-header') === toolbar && !document.getElementById('bookmarks').sortInstance.isDisabled;
+    }, {}, first);
+    await extPage.evaluate(() => { delete window.settingCardCheck; });
+  });
+
   it('shows hover delete, deletes safely, and restores through undo', async() => {
     const bookmarkSelector = `[data-id="${data.bookmarkIds[0]}"]`;
     const deleteSelector = `${bookmarkSelector} .bookmark__delete`;
@@ -263,9 +468,37 @@ describe('Chromium real-bookmark dock workflow', () => {
   });
 
   it('multi-selects with Ctrl and drags the group into a nearby folder', async() => {
+    await openFolder(data.sourceId);
     const first = `[data-id="${data.bookmarkIds[0]}"]`;
     const second = `[data-id="${data.bookmarkIds[1]}"]`;
     const target = `[data-folder-id="${data.targetId}"]`;
+    const retainedId = data.bookmarkIds[2];
+    await extPage.evaluate(id => {
+      window.crossFolderRow = document.getElementById('vb-' + id);
+      window.crossFolderIcon = window.crossFolderRow.querySelector('.site-icon__image');
+      const animate = Element.prototype.animate;
+      const motion = { movedCards: 0, fadedCards: 0, folderLanding: false };
+      window.crossFolderMotion = motion;
+      window.stopCrossFolderMotionCheck = () => {
+        Element.prototype.animate = animate;
+        delete window.crossFolderMotion;
+        delete window.stopCrossFolderMotionCheck;
+        return motion;
+      };
+      Element.prototype.animate = function(keyframes, options) {
+        const animation = animate.call(this, keyframes, options);
+        const frames = animation.effect.getKeyframes();
+        if (this.matches('#bookmarks > .bookmark[data-id]')) {
+          motion.movedCards += 1;
+          if (frames.some(frame => Number(frame.opacity) < 1)) motion.fadedCards += 1;
+        }
+        if (this.matches('.motion-drag-lift')
+          && frames.some(frame => frame.transform?.includes('scale(') && Number(frame.opacity) < 1)) {
+          motion.folderLanding = true;
+        }
+        return animation;
+      };
+    }, retainedId);
 
     await extPage.keyboard.down('Control');
     await extPage.click(first);
@@ -285,6 +518,13 @@ describe('Chromium real-bookmark dock workflow', () => {
       return nodes.map(([node]) => node.parentId);
     }, data.bookmarkIds.slice(0, 2));
     expect(parents).toEqual([data.targetId, data.targetId]);
+    await extPage.waitForFunction(id => !document.getElementById('vb-' + id), {}, data.bookmarkIds[0]);
+    await extPage.waitForFunction(() => window.crossFolderMotion.folderLanding, { timeout: 5000 });
+    const motion = await extPage.evaluate(() => window.stopCrossFolderMotionCheck());
+    expect(motion.movedCards).toBeGreaterThan(0);
+    expect(motion.fadedCards).toBe(0);
+    expect(await extPage.evaluate(() => window.crossFolderRow.isConnected && window.crossFolderIcon.isConnected))
+      .toBe(true);
   });
 
   it('creates and inline-renames a real nested folder', async() => {

@@ -1,6 +1,4 @@
-import { containsPermissions, requestPermissions } from '../api/permissions';
-import { storage } from '../api/storage';
-import Toast from './toast';
+import bindVisitPreviewSetting from './visitPreviewSetting';
 
 const POSITION_KEY = 'visual-bookmarks-folder-panel';
 const MARGIN = 16;
@@ -28,6 +26,9 @@ function setupActions(resetPanel) {
   const toggle = document.getElementById('newtabActionsToggle');
   const list = document.getElementById('newtabActionsList');
   const optIn = document.getElementById('visitPreviewEnabled');
+  const permissionHint = document.getElementById('visitPreviewPermission');
+  const refreshPreviews = list.querySelector('[data-newtab-action="refresh-previews"]');
+  const undoOrder = list.querySelector('[data-newtab-action="undo-order"]');
   const reset = list.querySelector('[data-newtab-action="reset"]');
   const restoreOrder = list.querySelector('[data-newtab-action="common-order"]');
   const close = focus => {
@@ -40,7 +41,8 @@ function setupActions(resetPanel) {
   if (isChinese()) {
     toggle.setAttribute('aria-label', '更多操作');
     toggle.title = '更多操作';
-    document.getElementById('visitPreviewLabel').textContent = '访问时更新预览';
+    refreshPreviews.textContent = '更新当前文件夹缩略图';
+    undoOrder.textContent = '撤销上次排序';
     reset.textContent = '复位文件夹面板';
     restoreOrder.textContent = '恢复常用排序';
   }
@@ -76,30 +78,20 @@ function setupActions(resetPanel) {
   document.addEventListener('bookmark-order-mode', event => {
     restoreOrder.hidden = event.detail.mode !== 'manual';
   });
+  undoOrder.addEventListener('click', () => {
+    close(true);
+    document.dispatchEvent(new Event('newtab:undo-order'));
+  });
+  document.addEventListener('bookmark-order-undo-state', event => {
+    undoOrder.hidden = !event.detail.available;
+  });
+  refreshPreviews.addEventListener('click', () => {
+    close(true);
+    document.dispatchEvent(new Event('newtab:refresh-previews'));
+  });
 
-  const origins = ['<all_urls>'];
-  const sync = async() => {
-    const { visitPreviewEnabled } = await storage.local.get('visitPreviewEnabled');
-    optIn.checked = Boolean(visitPreviewEnabled && await containsPermissions({ origins }));
-  };
-  sync().catch(() => { optIn.checked = false; });
-  browser.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.visitPreviewEnabled) sync().catch(() => { optIn.checked = false; });
-  });
-  browser.permissions.onRemoved?.addListener(() => sync().catch(() => { optIn.checked = false; }));
-  optIn.addEventListener('change', async() => {
-    optIn.disabled = true;
-    try {
-      const enabled = optIn.checked && await requestPermissions({ origins });
-      await storage.local.set({ visitPreviewEnabled: enabled });
-      optIn.checked = enabled;
-    } catch {
-      await sync().catch(() => { optIn.checked = false; });
-      Toast.show(isChinese() ? '无法更改预览设置，请重试。' : 'Could not change the preview setting. Try again.');
-    } finally {
-      optIn.disabled = false;
-    }
-  });
+  document.getElementById('visitPreviewLabel').textContent = browser.i18n.getMessage('settings_visit_preview');
+  bindVisitPreviewSetting(optIn, permissionHint);
 }
 
 export default function setupFolderPanelLayout(panel) {

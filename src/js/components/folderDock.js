@@ -1,4 +1,6 @@
 import Toast from './toast';
+import { reconcileChildren } from './domOrder';
+import { rememberOrderUndo } from './orderUndo';
 import Bookmarks from './bookmarks';
 import { DEFAULT_BOOKMARKS_FOLDER, ROOT_FOLDERS } from '../constants';
 import { storage } from '../api/storage';
@@ -19,6 +21,7 @@ import {
 import { createSiteIcon } from '../utils';
 
 const PREVIEW_SIZE = 10;
+const PREVIEW_ICON_SIZE = 16;
 
 function escapeHTML(value = '') {
   return String(value)
@@ -91,66 +94,140 @@ class FolderDock {
     const [roots, orders] = await Promise.all([getThree(), readDockOrders().catch(() => ({}))]);
     if (renderVersion !== this.#renderVersion) return;
     const scrollTop = this.#list.scrollTop;
-    const focused = document.activeElement;
-    const focusedCard = this.#list.contains(focused) && focused.closest('.folder-card');
-    const focusTarget = focusedCard && ['folder-card__open', 'folder-card__rename-button', 'folder-card__delete']
-      .find(className => focused.classList.contains(className));
+    const focused = this.#list.contains(document.activeElement) ? document.activeElement : null;
     this.#folders = flattenFolders(roots, orders);
     const activeId = this.#getActiveFolderId();
-
-    this.#list.innerHTML = this.#folders.map(folder => {
-      const bookmarks = folder.children?.filter(child => child.url) ?? [];
-      const previewItems = bookmarks.slice(0, PREVIEW_SIZE);
-      const cells = Array.from({ length: PREVIEW_SIZE }, (_, index) => {
-        const bookmark = previewItems[index];
-        if (!bookmark) return '<span class="folder-card__cell is-empty"></span>';
-        return `<span class="folder-card__cell" title="${escapeHTML(bookmark.title)}"
-          data-bookmark-id="${escapeHTML(bookmark.id)}" data-icon-url="${escapeHTML(bookmark.url)}">
-        </span>`;
-      }).join('');
-      const isProtected = isProtectedFolder(folder);
-      const isActive = folder.id === activeId;
-      const isPendingDelete = Boolean(bookmarksToDelete[folder.id]);
-      const unfiled = isRootFolder(folder) && folder.id === DEFAULT_BOOKMARKS_FOLDER;
-      const title = escapeHTML(unfiled ? text('未分组', 'Unfiled') : (folder.title || '未命名文件夹'));
-      const titleContent = this.#editingId === folder.id
-        ? `<input class="folder-card__rename" value="${title}" aria-label="重命名文件夹">`
-        : `<span class="folder-card__name" title="${title}">${title}</span>`;
-
-      return `<div class="folder-card${isActive ? ' is-active' : ''}"
-        data-folder-id="${escapeHTML(folder.id)}"
-        data-folder-parent="${escapeHTML(folder.parentId)}"
-        ${isProtected ? 'data-no-folder-reorder' : ''}
-        ${folder.unmodifiable || isPendingDelete ? 'data-no-bookmark-drop' : ''}
-        ${unfiled ? 'data-folder-kind="unfiled"' : ''}
-        ${isPendingDelete ? 'hidden' : ''}>
-        <button class="folder-card__open" type="button" aria-label="${title}，${bookmarks.length} 项"${isActive ? ' aria-current="true"' : ''}></button>
-        <div class="folder-card__preview" aria-hidden="true">${cells}</div>
-        <div class="folder-card__meta">
-          ${titleContent}
-          <span class="folder-card__count">${bookmarks.length} 项</span>
-        </div>
-        ${isProtected ? '' : `
-          <button class="folder-card__rename-button" type="button" aria-label="重命名 ${title}" title="重命名 (F2)">
-            <svg width="13" height="13" aria-hidden="true"><use href="/img/symbol.svg#edit_outline"></use></svg>
-          </button>
-          <button class="folder-card__delete" type="button" aria-label="删除 ${title}" title="删除文件夹">×</button>`}
-      </div>`;
-    }).join('');
-
+    const existing = new Map([...this.#list.children].map(card => [card.dataset.folderId, card]));
+    const cards = this.#folders.map(folder => this.#renderCard(folder, activeId, existing.get(folder.id)));
+    reconcileChildren(this.#list, cards);
     this.#list.scrollTop = scrollTop;
-    this.#list.querySelectorAll('[data-icon-url]').forEach(cell => {
-      cell.append(createSiteIcon(cell.dataset.iconUrl, { size: 18 }));
-    });
 
     const input = this.#list.querySelector('.folder-card__rename');
-    if (input) {
+    if (input && input !== focused) {
       input.focus();
       input.select();
-    } else if (focusTarget) {
-      const id = CSS.escape(focusedCard.dataset.folderId);
-      this.#list.querySelector(`[data-folder-id="${id}"]:not([hidden]) .${focusTarget}`)?.focus({ preventScroll: true });
+    } else if (focused?.isConnected && document.activeElement !== focused) {
+      focused.focus({ preventScroll: true });
     }
+  }
+
+  #renderCard(folder, activeId, card) {
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'folder-card';
+      card.dataset.folderId = folder.id;
+      card.innerHTML = '<button class="folder-card__open" type="button"></button>'
+        + '<div class="folder-card__preview" aria-hidden="true"></div>'
+        + '<div class="folder-card__meta"><span class="folder-card__name"></span>'
+        + '<span class="folder-card__count"></span></div>';
+    }
+
+    const bookmarks = folder.children?.filter(child => child.url) ?? [];
+    const protectedFolder = isProtectedFolder(folder);
+    const active = folder.id === activeId;
+    const unfiled = isRootFolder(folder) && folder.id === DEFAULT_BOOKMARKS_FOLDER;
+    const title = unfiled ? text('未分组', 'Unfiled') : (folder.title || '未命名文件夹');
+    const count = bookmarks.length + ' 项';
+
+    card.dataset.folderParent = folder.parentId ?? '';
+    card.classList.toggle('is-active', active);
+    card.hidden = !!bookmarksToDelete[folder.id];
+    card.toggleAttribute('data-no-folder-reorder', protectedFolder);
+    card.toggleAttribute('data-no-bookmark-drop', !!folder.unmodifiable || card.hidden);
+    if (unfiled) card.dataset.folderKind = 'unfiled';
+    else delete card.dataset.folderKind;
+    const open = card.querySelector('.folder-card__open');
+    open.setAttribute('aria-label', title + '，' + count);
+    if (active) open.setAttribute('aria-current', 'true');
+    else open.removeAttribute('aria-current');
+
+    this.#renderFolderName(card, title, this.#editingId === folder.id);
+    const label = card.querySelector('.folder-card__count');
+    if (label.textContent !== count) label.textContent = count;
+    this.#renderPreview(card.querySelector('.folder-card__preview'), bookmarks);
+    this.#renderActions(card, title, protectedFolder);
+    return card;
+  }
+
+  #renderFolderName(card, title, editing) {
+    const input = card.querySelector('.folder-card__rename');
+    const name = card.querySelector('.folder-card__name');
+    if (editing) {
+      if (input) return;
+      const edit = document.createElement('input');
+      edit.className = 'folder-card__rename';
+      edit.value = title;
+      edit.setAttribute('aria-label', '重命名文件夹');
+      name.replaceWith(edit);
+      return;
+    }
+
+    if (input) {
+      const label = document.createElement('span');
+      label.className = 'folder-card__name';
+      label.title = title;
+      label.textContent = title;
+      input.replaceWith(label);
+    } else if (name && name.textContent !== title) {
+      name.title = title;
+      name.textContent = title;
+    }
+  }
+
+  #renderPreview(preview, bookmarks) {
+    const cells = [...preview.children];
+    const icons = new Map(cells.filter(cell => cell.dataset.bookmarkId).map(cell => [cell.dataset.bookmarkId, cell]));
+    const empty = cells.filter(cell => !cell.dataset.bookmarkId);
+    const next = [];
+    for (let index = 0; index < PREVIEW_SIZE; index++) {
+      const bookmark = bookmarks[index];
+      const existing = bookmark ? icons.get(bookmark.id) : empty.shift();
+      if (existing && (!bookmark || existing.dataset.iconUrl === bookmark.url)) {
+        if (bookmark) existing.title = bookmark.title;
+        next.push(existing);
+        continue;
+      }
+
+      const cell = document.createElement('span');
+      cell.className = bookmark ? 'folder-card__cell' : 'folder-card__cell is-empty';
+      if (bookmark) {
+        cell.dataset.iconUrl = bookmark.url;
+        cell.dataset.bookmarkId = bookmark.id;
+        cell.title = bookmark.title;
+        cell.append(createSiteIcon(bookmark.url, { size: PREVIEW_ICON_SIZE }));
+      }
+      next.push(cell);
+    }
+    reconcileChildren(preview, next);
+  }
+
+  #renderActions(card, title, protectedFolder) {
+    let rename = card.querySelector('.folder-card__rename-button');
+    let remove = card.querySelector('.folder-card__delete');
+    if (protectedFolder) {
+      rename?.remove();
+      remove?.remove();
+      return;
+    }
+    if (!rename) {
+      rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'folder-card__rename-button';
+      rename.title = '重命名 (F2)';
+      rename.innerHTML = '<svg width="13" height="13" aria-hidden="true">'
+        + '<use href="/img/symbol.svg#edit_outline"></use></svg>';
+      card.append(rename);
+    }
+    if (!remove) {
+      remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'folder-card__delete';
+      remove.title = '删除文件夹';
+      remove.textContent = '×';
+      card.append(remove);
+    }
+    rename.setAttribute('aria-label', '重命名 ' + title);
+    remove.setAttribute('aria-label', '删除 ' + title);
   }
 
   #attachEvents() {
@@ -346,20 +423,7 @@ class FolderDock {
       });
       if (!changed) return false;
       await this.render();
-      Toast.show({
-        message: text('文件夹顺序已保存。', 'Folder order saved.'),
-        delay: 8500,
-        progress: true,
-        hideByClick: false,
-        action: {
-          html: browser.i18n.getMessage('undo'),
-          class: ['btn', 'btn--clear', 'md-ripple'],
-          callback: (event, hideToast) => {
-            hideToast();
-            this.#undoReorder(parent, changed);
-          }
-        }
-      });
+      rememberOrderUndo(() => this.#undoReorder(parent, changed));
       return true;
     } catch (error) {
       console.warn(error);
@@ -384,6 +448,7 @@ class FolderDock {
       if (!restored) Toast.show(text('文件夹顺序已在其他页面变更。', 'Folders were reordered in another tab.'));
     } catch (error) {
       console.warn(error);
+      Toast.show(text('无法撤销文件夹顺序。', 'The folder order could not be undone.'));
     }
   }
 

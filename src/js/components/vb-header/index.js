@@ -328,7 +328,7 @@ class VbHeader extends HTMLElement {
   }
 
   handleDocumentKeydown(e) {
-    if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    if (!settings.$.show_toolbar || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
     const active = this.getActiveElement();
     const searchShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k';
     const slashShortcut = e.code === 'Slash' && !e.ctrlKey && !e.metaKey && !e.altKey

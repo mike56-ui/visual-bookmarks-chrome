@@ -4,7 +4,8 @@ function trackOpen(event) {
   if (event.defaultPrevented || !event.isTrusted || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
   const card = event.target.closest('#bookmarks a.bookmark[href]');
   if (!card || event.target.closest('button, input') || card.hidden) return;
-  recordOpen(card.dataset.id);
+  const opensHere = event.button === 0 && !card.target && ['https:', 'http:'].includes(card.protocol);
+  recordOpen(card.dataset.id, opensHere ? card.href : undefined);
 }
 
 document.addEventListener('click', event => {

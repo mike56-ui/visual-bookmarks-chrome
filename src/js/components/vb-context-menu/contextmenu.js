@@ -54,7 +54,6 @@ class ContextMenu {
 
   getDOMChildren() {
     this.items = Array.from(this.menu.querySelectorAll('.context-menu__link'));
-    this.itemsLength = this.items.length;
   }
 
   attachEvents() {
@@ -78,11 +77,15 @@ class ContextMenu {
     document.removeEventListener('click', this.handlerClick);
   }
 
-  position(e) {
+  position(e, anchor) {
     this.menu.style.top = 0;
     this.menu.style.left = 0;
 
-    if (!e.clientX && !e.clientY) {
+    if (anchor) {
+      const pos = anchor.getBoundingClientRect();
+      this.menuX = pos.left + window.scrollX;
+      this.menuY = pos.bottom + window.scrollY + 4;
+    } else if (!e.clientX && !e.clientY) {
       // trigger by key
       const target = e.target;
       const pos = target.getBoundingClientRect();
@@ -100,13 +103,13 @@ class ContextMenu {
     const windowHeight = document.documentElement.clientHeight + window.pageYOffset;
 
     if ((windowWidth - this.menuX) < this.menuWidth) {
-      this.menu.style.left = `${windowWidth - this.menuWidth - this.settings.tresholdMargin}px`;
+      this.menu.style.left = `${Math.max(0, windowWidth - this.menuWidth - this.settings.tresholdMargin)}px`;
     } else {
       this.menu.style.left = `${this.menuX}px`;
     }
 
     if ((windowHeight - this.menuY) < this.menuHeight) {
-      this.menu.style.top = `${windowHeight - this.menuHeight - this.settings.tresholdMargin}px`;
+      this.menu.style.top = `${Math.max(0, windowHeight - this.menuHeight - this.settings.tresholdMargin)}px`;
     } else {
       this.menu.style.top = `${this.menuY}px`;
     }
@@ -117,30 +120,27 @@ class ContextMenu {
   }
 
   handlerKeyboard(e) {
-    const key = e.which;
-
-    switch (key) {
-      case 38: {
-        if (this.state) {
-          e.preventDefault();
-          this.prev();
-        }
-        break;
-      }
-      case 40: {
-        if (this.state) {
-          e.preventDefault();
-          this.next();
-        }
-        break;
-      }
-      case 27:
-        this.close();
-        break;
-      case 13:
-        this.enter(e);
-        break;
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      const card = e.target.closest(this.settings.delegateSelector);
+      if (card) this.handlerTrigger(e, card.querySelector('.bookmark__actions'));
+      return;
     }
+    if (!this.state) return;
+    if (e.key === 'Escape' || e.key === 'Tab') {
+      if (e.key === 'Escape') e.preventDefault();
+      this.close(true);
+      return;
+    }
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+
+    e.preventDefault();
+    const items = this.enabledItems();
+    if (!items.length) return;
+    const index = items.indexOf(document.activeElement);
+    const offset = e.key === 'ArrowUp' ? -1 : 1;
+    const next = e.key === 'Home' || index < 0 ? 0 : e.key === 'End' ? items.length - 1
+      : (index + items.length + offset) % items.length;
+    items[next].focus();
   }
 
   handlerClick(e) {
@@ -158,99 +158,68 @@ class ContextMenu {
     this.select(action);
   }
 
-  handlerTrigger(e) {
+  handlerTrigger(e, anchor) {
     if (!this.menu || !this.menu.active) return;
 
     const target = e.target.closest(this.settings.delegateSelector);
-    if (target) {
+    if (target && !target.hidden && !target.hasOverlay) {
       e.preventDefault();
-      this.trigger = target;
+      if (anchor && this.state && anchor === this.anchor) {
+        this.close(true);
+        return;
+      }
       this.close();
-      this.open(e);
+      this.trigger = target;
+      this.anchor = anchor;
+      this.open(e, anchor);
     } else {
       this.close();
     }
   }
 
-  next() {
-    this.currentIndex = (this.currentIndex + 1) % this.itemsLength;
-    if (this.items[this.currentIndex].classList.contains('is-disabled')) {
-      this.next();
-      return;
-    }
-    this.mark();
-  }
-
-  prev() {
-    this.currentIndex--;
-    if (this.currentIndex < 0) {
-      this.currentIndex = this.itemsLength - 1;
-    }
-    if (this.items[this.currentIndex].classList.contains('is-disabled')) {
-      this.prev();
-      return;
-    }
-    this.mark();
-  }
-
-  mark() {
-    const current = this.menu.querySelector('.hover');
-    if (current) {
-      current.classList.remove('hover');
-    }
-
-    this.items[this.currentIndex].classList.add('hover');
-  }
-
-  enter(e) {
-    if (!this.state) return;
-    e.preventDefault();
-    e.stopPropagation();
-    this.select(this.items[this.currentIndex]);
+  enabledItems() {
+    return this.items.filter(item => !item.disabled && !item.classList.contains('is-disabled'));
   }
 
   select(action) {
-    if (action && !action.classList.contains('disabled')) {
+    if (action && !action.disabled && !action.classList.contains('is-disabled')) {
+      const trigger = this.trigger;
+      this.close(true);
       $customTrigger(EVENTS.SELECTION, this.menu, {
         detail: {
           selection: action.dataset.action,
-          trigger: this.trigger
+          trigger
         }
       });
-
-      this.close();
     }
   }
 
-  open(e) {
+  open(e, anchor) {
     if (this.state) return;
 
     this.state = true;
     this.menu.classList.add('context-menu--open');
+    this.trigger.querySelector('.bookmark__actions')?.setAttribute('aria-expanded', 'true');
 
     $customTrigger(EVENTS.OPEN, this.menu, {
       detail: {
         trigger: this.trigger
       }
     });
-    this.position(e);
+    this.position(e, anchor);
 
-    // links
-    this.currentIndex = -1;
     this.getDOMChildren();
+    this.enabledItems()[0]?.focus({ preventScroll: true });
   }
 
-  close() {
+  close(restoreFocus = false) {
     if (!this.state) return;
 
     this.state = false;
     this.menu.classList.remove('context-menu--open');
-
-    const current = this.menu.querySelector('.hover');
-    if (current) {
-      current.classList.remove('hover');
-    }
-    this.currentIndex = -1;
+    this.trigger.querySelector('.bookmark__actions')?.setAttribute('aria-expanded', 'false');
+    const opener = this.anchor ?? this.trigger;
+    if (restoreFocus && opener.isConnected) opener.focus({ preventScroll: true });
 
     $customTrigger(EVENTS.CLOSE, this.menu, {
       detail: {

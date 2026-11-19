@@ -310,7 +310,9 @@ export function createSiteIcon(url, { size = 36, source } = {}) {
     class: 'site-icon__image', alt: '', loading: 'lazy', decoding: 'async', draggable: 'false',
     referrerpolicy: 'no-referrer'
   });
-  loadSiteIcon(image, url, source || faviconURL(url, size > 24 ? 32 : 16), size);
+  const pixels = Math.ceil(size * (window.devicePixelRatio || 1));
+  const iconSize = [16, 32, 64, 128].find(value => value >= pixels) || 128;
+  loadSiteIcon(image, url, source || faviconURL(url, iconSize), size);
   frame.append(image);
   return frame;
 }

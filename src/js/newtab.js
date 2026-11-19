@@ -5,6 +5,7 @@ import './components/vb-scrollup';
 import './components/vb-bookmarks-panel';
 import FolderDock from './components/folderDock';
 import bindMotionDrag from './components/motionDrag';
+import initializeSettingsDrawer from './components/settingsDrawer';
 
 import Gmodal from 'glory-modal';
 import { settings } from './settings';
@@ -55,8 +56,10 @@ let lastSelectedBookmark = null;
 let selectionPanelRequest;
 let isGenerateThumbs = false;
 let modalApi;
+let bookmarkModalOpened = Promise.resolve();
 let generateThumbsBtn = null;
 let nativeBookmarksRefreshTimer = null;
+let previewRefreshTimer;
 let gridRefreshPending = false;
 
 async function init() {
@@ -104,6 +107,7 @@ async function init() {
   document.addEventListener('newtab:restore-common-order', () => {
     Bookmarks.restoreCommonOrder().catch(console.warn);
   });
+  document.addEventListener('newtab:refresh-previews', handleGenerateThumbs);
 
   /**
    * Localization
@@ -115,18 +119,8 @@ async function init() {
    */
   Ripple.init('.md-ripple');
 
-  Bookmarks.init().then(() => {
-    if (settings.$.enable_virtual_pagination) {
-      // eslint-disable-next-line max-len
-      asyncLoadComponents(() => import(/* webpackChunkName: "webcomponents/vb-virtual-pagination" */'./components/vb-virtual-pagination'))
-        .then(() => {
-          document.body.insertAdjacentElement(
-            'beforeEnd',
-            $createElement('vb-virtual-pagination', { 'scrollable-selector': '.app' })
-          );
-        });
-    }
-  });
+  Bookmarks.init().then(syncPagination);
+  initializeSettingsDrawer({ onSettingsChange: changes => applySettingsChanges(changes, folderDock) });
 
   const scheduleGridRefresh = () => {
     window.clearTimeout(nativeBookmarksRefreshTimer);
@@ -151,7 +145,9 @@ async function init() {
     modalApi.open();
   });
   modalApi.element.addEventListener('gmodal:beforeopen', () => {
-    // reset form and validation errors
+    bookmarkModalOpened = new Promise(resolve => {
+      modalApi.element.addEventListener('gmodal:open', resolve, { once: true });
+    });
     form.reset();
   });
   modalApi.element.addEventListener('gmodal:open', () => {
@@ -216,30 +212,38 @@ async function init() {
   container.addEventListener('thumbnails:updating', () => {
     isGenerateThumbs = true;
     if (generateThumbsBtn) generateThumbsBtn.disabled = true;
+    document.querySelector('[data-newtab-action="refresh-previews"]').disabled = true;
   });
   container.addEventListener('thumbnails:updated', () => {
     isGenerateThumbs = false;
     if (generateThumbsBtn) generateThumbsBtn.disabled = false;
+    document.querySelector('[data-newtab-action="refresh-previews"]').disabled = false;
   });
 
+  const schedulePreviewRefresh = () => {
+    window.clearTimeout(previewRefreshTimer);
+    if (!document.hidden) previewRefreshTimer = window.setTimeout(() => {
+      if (!document.hidden) Bookmarks.refreshVisiblePreviews();
+    }, 100);
+  };
   const refreshGridWhenVisible = () => {
-    if (gridRefreshPending && !document.hidden && document.hasFocus()) {
+    if (document.hidden) return;
+    if (gridRefreshPending) {
       gridRefreshPending = false;
       scheduleGridRefresh();
-    }
+    } else schedulePreviewRefresh();
   };
   browser.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes[USAGE_KEY]) gridRefreshPending = true;
   });
-  window.addEventListener('pageshow', refreshGridWhenVisible);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) refreshGridWhenVisible();
+  });
   window.addEventListener('focus', refreshGridWhenVisible);
   document.addEventListener('visibilitychange', refreshGridWhenVisible);
   browser.runtime.onMessage.addListener(request => {
     if (request?.bookmarksUpdated) refreshNativeBookmarks();
-    if (request?.visitPreviewUpdated) {
-      gridRefreshPending = true;
-      refreshGridWhenVisible();
-    }
+    if (request?.visitPreviewUpdated) schedulePreviewRefresh();
   });
 
   // import(/* webpackChunkName: "webcomponents/vb-actions-panel" */'./components/vb-bookmarks-panel');
@@ -260,7 +264,7 @@ async function init() {
 function handleSelectBookmark(e) {
   if (isGenerateThumbs) return;
   const bookmark = e.target.closest('.bookmark');
-  if (!bookmark || bookmark.hidden || e.target.closest('.bookmark__delete')) return true;
+  if (!bookmark || bookmark.hidden || e.target.closest('.bookmark__actions, .bookmark__delete')) return true;
 
   if (!e.shiftKey && !e.ctrlKey && !e.metaKey) return true;
 
@@ -411,13 +415,16 @@ function handlePopstate() {
 }
 
 async function handleGenerateThumbs() {
-  if (!isGenerateThumbs && await Bookmarks.checkHostPermissions()) {
-    await Bookmarks.autoUpdateThumb();
-  }
+  if (!isGenerateThumbs) await Bookmarks.refreshCurrentThumbnails();
 }
 
 function handleDelegateClick(evt) {
-  if (evt.target.closest('#bookmark-back')) {
+  const actions = evt.target.closest('.bookmark__actions');
+  if (actions) {
+    evt.preventDefault();
+    evt.stopPropagation();
+    ctxMenuEl.trigger(evt, actions);
+  } else if (evt.target.closest('#bookmark-back')) {
     evt.preventDefault();
     window.location.hash = container.dataset.parentFolder;
   } else if (evt.target.closest('#add')) {
@@ -478,6 +485,9 @@ async function handleMenuOpen(evt) {
     // hide the menu item if there is no thumbnail
     items = items.filter(item => item.action !== 'delete_thumbnail');
   }
+  if (!['https:', 'http:'].includes(evt.detail.protocol)) {
+    items = items.filter(item => item.action !== 'capture');
+  }
 
   // render menu items
   ctxMenuEl.listItems = items;
@@ -488,7 +498,9 @@ async function handleMenuOpen(evt) {
     // check if the permission is granted
     // else disable the menu item
     const clipboardReadPermission = await containsPermissions({ permissions: ['clipboardRead'] });
-    pasteItem.classList.toggle('is-disabled', clipboardReadPermission ? !(await checkClipboardImage()) : true);
+    const disabled = !clipboardReadPermission || !(await checkClipboardImage());
+    pasteItem.classList.toggle('is-disabled', disabled);
+    pasteItem.disabled = disabled;
   }
 }
 
@@ -540,7 +552,7 @@ async function handleMenuSelection(evt) {
       break;
     }
     case 'delete_thumbnail': {
-      Bookmarks.removeThumbnail(target.id, target.href);
+      Bookmarks.removeThumbnail(target.id);
       break;
     }
     case 'remove': {
@@ -592,8 +604,48 @@ function handleCloseModal() {
 }
 
 // TODO: experiment webcomponents
+function syncPagination() {
+  if (!settings.$.enable_virtual_pagination) {
+    document.querySelector('vb-virtual-pagination')?.remove();
+    return;
+  }
+  asyncLoadComponents(() => import(
+    /* webpackChunkName: "webcomponents/vb-virtual-pagination" */'./components/vb-virtual-pagination'))
+    .then(() => {
+      if (settings.$.enable_virtual_pagination && !document.querySelector('vb-virtual-pagination')) {
+        document.body.append($createElement('vb-virtual-pagination', { 'scrollable-selector': '.app' }));
+      }
+    });
+}
+
+function applySettingsChanges(changes, folderDock) {
+  const before = changes.settings?.oldValue || {};
+  const after = changes.settings?.newValue || {};
+  const changed = (...keys) => keys.some(key => before[key] !== after[key]);
+  if (changed('color_theme')) window.vbToggleTheme?.();
+  if (changed('custom_style')) UI.userStyles();
+  if (changes.backgroundMedia || changed('background_image', 'background_external', 'background_effect')) UI.setBG();
+  if (changed('dial_columns', 'dial_width', 'services_enable', 'show_settings_icon', 'thumbnails_update_button')) {
+    UI.calculateStyles();
+  }
+  if (changed('show_toolbar', 'search_engine', 'open_link_newtab')) Bookmarks.syncToolbar();
+  if (changed('vertical_center')) container.classList.toggle('grid--vcenter', settings.$.vertical_center);
+  if (changed('enable_virtual_pagination')) syncPagination();
+  if (changed('services_enable') || JSON.stringify(before.services_list) !== JSON.stringify(after.services_list)) {
+    document.querySelector('vb-services')?.remove();
+    if (settings.$.services_enable) runServices();
+  }
+  if (changes.thumbnailMedia || changed('open_link_newtab', 'show_bookmark_title', 'show_favicon',
+    'sort_by', 'bookmarks_sorting_type', 'default_folder_id', 'show_last_opened_folder',
+    'folder_preview', 'drag_and_drop')) {
+    Bookmarks.refreshFromNative();
+  }
+  if (changed('default_folder_id', 'show_last_opened_folder')) folderDock.scheduleRender();
+}
+
 function runServices() {
   import(/* webpackChunkName: "webcomponents/vb-services" */'./components/vb-services').then(() => {
+    if (!settings.$.services_enable || document.querySelector('vb-services')) return;
     const el = document.createElement('vb-services');
     el.classList.add('sticky');
     el.servicesList = settings.$.services_list;
@@ -720,14 +772,20 @@ async function handleSubmitForm(evt) {
   const id = form.getAttribute('data-action');
   const title = form.title.value.trim();
   const url = form.url.value.trim();
+  const opened = bookmarkModalOpened;
   form.dataset.saving = 'true';
   try {
     if (id === 'New') {
-      await Bookmarks.createBookmark(title, url);
+      const bookmark = await Bookmarks.createBookmark(title, url);
+      if (bookmark.url) {
+        browser.runtime.sendMessage({ newBookmarkPreview: { id: bookmark.id, url: bookmark.url } }).catch(console.warn);
+      }
     } else {
       await Bookmarks.updateBookmark(id, title, url, modalSelectFolders.value);
     }
-    modalApi.close();
+    // Gmodal ignores close() while its opening transition is in progress.
+    await opened;
+    if (opened === bookmarkModalOpened) modalApi.close();
   } catch (error) {
     console.warn(error);
     Toast.show(browser.i18n.getMessage('notice_bookmark_operation_failed') || 'The bookmark could not be saved.');
@@ -745,8 +803,7 @@ async function handleResetThumb(evt) {
   evt.preventDefault();
   const id = this.getAttribute('data-bookmark');
 
-  await Bookmarks.removeThumbnail(id);
-  this.closest('#customScreen').style.display = '';
+  if (await Bookmarks.removeThumbnail(id)) this.closest('#customScreen').style.display = '';
 }
 
 async function prepareModal(target) {
@@ -765,7 +822,7 @@ async function prepareModal(target) {
     modalSelectFolders.setAttribute('bookmark-id', id);
     modalSelectFolders.folders = await getFolders();
 
-    if (imageData) {
+    if (imageData?.blob) {
       const image = URL.createObjectURL(imageData.blob);
       const imgElement = customScreen.querySelector('img');
 
@@ -798,4 +855,30 @@ async function prepareModal(target) {
   }
 }
 
-init();
+async function reloadUpdatedDevelopmentCopy(version) {
+  const self = await browser.management?.getSelf();
+  if (self?.installType !== 'development') return;
+  // The installer finishes by replacing manifest.json. Avoid a reload during a partial copy.
+  const response = await fetch(browser.runtime.getURL('manifest.json'), { cache: 'no-store' });
+  if (!response.ok || (await response.json()).version !== version) return;
+  const key = 'lastUnpackedReload';
+  const [lastVersion, lastTime] = (localStorage.getItem(key) || '').split('/');
+  if (lastVersion === version && Date.now() - Number(lastTime) < 30000) return;
+  localStorage.setItem(key, `${version}/${Date.now()}`);
+  browser.runtime.reload();
+  return true;
+}
+
+async function startNewTab() {
+  const version = process.env.BOOKMARK_BUILD_VERSION;
+  if (process.env.BROWSER === 'chrome' && browser.runtime.getManifest().version !== version) {
+    try {
+      if (await reloadUpdatedDevelopmentCopy(version)) return;
+    } catch (error) {
+      console.warn(error);
+    }
+  }
+  return init();
+}
+
+startNewTab();

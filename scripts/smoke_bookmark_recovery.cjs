@@ -69,10 +69,17 @@ async function setToggle(page, key, value) {
     finally { await page.keyboard.up('Control'); }
     await page.waitForSelector(`${card(data.keep)}[data-selected]`);
     await page.waitForSelector('#bookmarks-panel');
+    await page.$eval(card(data.keep), element => { window.recoverySelectedCard = element; });
+    await page.evaluate(id => chrome.bookmarks.update(id, { title: 'Undo renamed' }), data.remove);
+    await page.waitForFunction(id => document.querySelector(`#bookmarks [data-id="${id}"]`)?.title === 'Undo renamed', {}, data.remove);
+    assert.equal(await page.$eval(card(data.keep), element => element === window.recoverySelectedCard
+      && element.hasAttribute('data-selected') && !!document.querySelector('#bookmarks-panel')), true);
+
     await page.evaluate(id => chrome.bookmarks.update(id, { title: 'Keep renamed' }), data.keep);
     await page.waitForFunction(id => {
       const el = document.querySelector(`#bookmarks [data-id="${id}"]`);
-      return el?.title === 'Keep renamed' && !el.hasAttribute('data-selected') && !document.querySelector('#bookmarks-panel');
+      return el === window.recoverySelectedCard && el?.title === 'Keep renamed'
+        && !el.hasAttribute('data-selected') && !document.querySelector('#bookmarks-panel');
     }, {}, data.keep);
     console.log('PASS native refresh closes stale selection and shows fresh bookmark data');
 
@@ -138,16 +145,17 @@ async function setToggle(page, key, value) {
     console.log('PASS concurrent changes from two settings tabs preserve both fields');
 
     const legacyStyle = '/* 收藏夹 · 中文备份 · café */';
-    const reload = optionsA.waitForNavigation();
     await optionsA.$eval('#import', (input, style) => {
+      window.recoverySettingsDocument = document;
       const backup = JSON.stringify({ custom_style: style, color_theme: 'dark', visitPreviewEnabled: true });
       const transfer = new DataTransfer();
       transfer.items.add(new File([backup], 'visual-bookmarks-settings.backup', { type: 'text/plain' }));
       input.files = transfer.files;
       input.dispatchEvent(new Event('change', { bubbles: true }));
     }, legacyStyle);
-    await reload;
-    await waitForOptions(optionsA);
+    await optionsA.waitForFunction(style => document.getElementById('custom_style')?.value === style
+      && document.getElementById('color_theme')?.value === 'dark', { polling: 100 }, legacyStyle);
+    assert.equal(await optionsA.evaluate(() => window.recoverySettingsDocument === document), true);
     const saved = await optionsA.evaluate(() => chrome.storage.local.get(['settings', 'visitPreviewEnabled']));
     assert.equal(saved.settings.custom_style, legacyStyle);
     assert.equal(saved.settings.color_theme, 'dark');
