@@ -4,30 +4,12 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const puppeteer = require('puppeteer');
+const countCaptureCalls = require('./preview_capture_counter.cjs');
 
 const build = path.resolve(process.env.VB_TEST_EXTENSION || 'extension_chrome');
 const exe = process.env.PUPPETEER_EXECUTABLE_PATH;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const requests = [];
-
-async function countCaptureCalls(target) {
-  const session = await target.createCDPSession();
-  const evaluate = async expression => {
-    const { result, exceptionDetails } = await session.send('Runtime.evaluate', { expression, returnByValue: true });
-    assert.equal(exceptionDetails, undefined, 'Worker screenshot counter could not be installed or read');
-    return result.value;
-  };
-  assert.equal(await evaluate(`(() => {
-    const capture = chrome.tabs.captureVisibleTab;
-    globalThis.testCaptureCalls = 0;
-    chrome.tabs.captureVisibleTab = function(...args) {
-      globalThis.testCaptureCalls++;
-      return capture.apply(this, args);
-    };
-    return chrome.tabs.captureVisibleTab !== capture;
-  })()`), true);
-  return () => evaluate('globalThis.testCaptureCalls');
-}
 
 async function run(extension, origin, authorized, updateColor) {
   const browser = await puppeteer.launch({
@@ -42,9 +24,7 @@ async function run(extension, origin, authorized, updateColor) {
     // Enter the same new-tab override the user gets with Ctrl+T.
     await home.goto('chrome://newtab/');
     await home.waitForSelector('#folderDockList .folder-card');
-    const workerUrl = await home.evaluate(() => chrome.runtime.getURL('background.js'));
-    const target = await browser.waitForTarget(t => t.type() === 'service_worker' && t.url() === workerUrl);
-    const getCaptureCalls = await countCaptureCalls(target);
+    const getCaptureCalls = await countCaptureCalls(home);
     const pageUrl = await home.evaluate(() => chrome.runtime.getURL('newtab.html'));
     assert.equal(await home.evaluate(() => location.href), pageUrl);
     const ids = await home.evaluate(async origin => {

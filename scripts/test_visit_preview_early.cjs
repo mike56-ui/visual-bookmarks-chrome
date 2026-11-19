@@ -4,6 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const puppeteer = require('puppeteer');
+const countCaptureCalls = require('./preview_capture_counter.cjs');
 
 const build = path.resolve(process.env.VB_TEST_EXTENSION || 'extension_chrome');
 const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -59,24 +60,7 @@ async function run(directory, origin) {
     const home = await browser.newPage();
     await home.goto('chrome://newtab/');
     await home.waitForSelector('#folderDockList .folder-card');
-    const workerUrl = await home.evaluate(() => chrome.runtime.getURL('background.js'));
-    const worker = await browser.waitForTarget(target => target.type() === 'service_worker' && target.url() === workerUrl);
-    const session = await worker.createCDPSession();
-    const readWorker = async expression => {
-      const { result, exceptionDetails } = await session.send('Runtime.evaluate', { expression, returnByValue: true });
-      assert.equal(exceptionDetails, undefined);
-      return result.value;
-    };
-    assert.equal(await readWorker(`(() => {
-      const capture = chrome.tabs.captureVisibleTab;
-      globalThis.testCaptureCalls = 0;
-      chrome.tabs.captureVisibleTab = (...args) => {
-        globalThis.testCaptureCalls++;
-        return capture.apply(chrome.tabs, args);
-      };
-      return chrome.tabs.captureVisibleTab !== capture;
-    })()`), true);
-    const captures = () => readWorker('globalThis.testCaptureCalls');
+    const captures = await countCaptureCalls(home);
     const pageUrl = await home.evaluate(() => chrome.runtime.getURL('newtab.html'));
     assert.equal(await home.evaluate(() => chrome.permissions.contains({ origins: ['<all_urls>'] })), true);
     const folder = await home.evaluate(async() => {
@@ -103,10 +87,10 @@ async function run(directory, origin) {
     const { page: slow, bookmark: slowBookmark } = await bookmarkOpenPage('/slow');
     await slow.waitForFunction(() => document.querySelector('main') && document.visibilityState === 'visible'
       && performance.getEntriesByName('first-contentful-paint', 'paint').length > 0);
-    await sleep(430);
+    const beforeReturn = await waitForPixel(home, slowBookmark.url, [42, 121, 163], 'First screen missing before load');
     assert.notEqual(await slow.evaluate(() => document.readyState), 'complete', 'Fixture must still be waiting on a resource');
     await home.bringToFront();
-    await waitForPixel(home, slowBookmark.url, [42, 121, 163], 'Painted page was never saved after return before load');
+    assert.deepEqual(await sample(home, slowBookmark.url), beforeReturn, 'The original first screen must survive switching tabs');
     await home.waitForFunction(id => window.testOriginalTab
       && document.querySelector(`#bookmarks [data-id="${id}"] .bookmark__screenshot img`)?.naturalWidth > 0,
     {}, slowBookmark.id);
