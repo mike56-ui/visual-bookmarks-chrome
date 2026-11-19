@@ -36,15 +36,16 @@ async function run(extension, origin, authorized, updateColor) {
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });
   try {
-    const target = await browser.waitForTarget(t => t.type() === 'service_worker');
-    const getCaptureCalls = await countCaptureCalls(target);
-    const pageUrl = target.url().replace(/\/background\.js$/, '/newtab.html');
     const home = await browser.newPage();
     const errors = [];
     home.on('pageerror', err => errors.push(err.message));
     // Enter the same new-tab override the user gets with Ctrl+T.
     await home.goto('chrome://newtab/');
     await home.waitForSelector('#folderDockList .folder-card');
+    const workerUrl = await home.evaluate(() => chrome.runtime.getURL('background.js'));
+    const target = await browser.waitForTarget(t => t.type() === 'service_worker' && t.url() === workerUrl);
+    const getCaptureCalls = await countCaptureCalls(target);
+    const pageUrl = await home.evaluate(() => chrome.runtime.getURL('newtab.html'));
     assert.equal(await home.evaluate(() => location.href), pageUrl);
     const ids = await home.evaluate(async origin => {
       const [tree] = await chrome.bookmarks.getTree();

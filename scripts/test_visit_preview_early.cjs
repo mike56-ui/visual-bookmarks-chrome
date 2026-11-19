@@ -56,7 +56,11 @@ async function run(directory, origin) {
     `--disable-extensions-except=${directory}`, `--load-extension=${directory}`
   ] });
   try {
-    const worker = await browser.waitForTarget(target => target.type() === 'service_worker');
+    const home = await browser.newPage();
+    await home.goto('chrome://newtab/');
+    await home.waitForSelector('#folderDockList .folder-card');
+    const workerUrl = await home.evaluate(() => chrome.runtime.getURL('background.js'));
+    const worker = await browser.waitForTarget(target => target.type() === 'service_worker' && target.url() === workerUrl);
     const session = await worker.createCDPSession();
     const readWorker = async expression => {
       const { result, exceptionDetails } = await session.send('Runtime.evaluate', { expression, returnByValue: true });
@@ -73,10 +77,7 @@ async function run(directory, origin) {
       return chrome.tabs.captureVisibleTab !== capture;
     })()`), true);
     const captures = () => readWorker('globalThis.testCaptureCalls');
-    const pageUrl = worker.url().replace(/\/background\.js$/, '/newtab.html');
-    const home = await browser.newPage();
-    await home.goto(pageUrl);
-    await home.waitForSelector('#folderDockList .folder-card');
+    const pageUrl = await home.evaluate(() => chrome.runtime.getURL('newtab.html'));
     assert.equal(await home.evaluate(() => chrome.permissions.contains({ origins: ['<all_urls>'] })), true);
     const folder = await home.evaluate(async() => {
       const [tree] = await chrome.bookmarks.getTree();

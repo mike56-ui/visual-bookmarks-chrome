@@ -35,7 +35,7 @@ async function verify() {
     args: [`--lang=${language}`, `--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });
   try {
-    const worker = await browser.waitForTarget(target => target.type() === 'service_worker', { timeout: 15000 });
+    const worker = await browser.waitForTarget(target => target.type() === 'service_worker' && target.url().endsWith('/background.js'), { timeout: 15000 });
     const homeURL = worker.url().replace(/background\.js$/, 'newtab.html');
     const page = await browser.newPage();
     const errors = [];

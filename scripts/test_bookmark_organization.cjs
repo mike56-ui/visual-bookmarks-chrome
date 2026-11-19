@@ -23,7 +23,7 @@ function chromium() {
     args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension]
   });
   try {
-    const worker = await browser.waitForTarget(target => target.type() === 'service_worker', { timeout: 12000 });
+    const worker = await browser.waitForTarget(target => target.type() === 'service_worker' && target.url().endsWith('/background.js'), { timeout: 12000 });
     const page = await browser.newPage();
     await page.setViewport({ width: 1440, height: 900 });
     const errors = [];
