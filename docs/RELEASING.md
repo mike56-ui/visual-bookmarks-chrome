@@ -8,7 +8,7 @@
 
 安装包固定名为 `visual-bookmarks-edge.zip`，ZIP 根目录包含 `manifest.json`。安装步骤见 [安装说明](release-notes.md)。
 
-版本号由 `manifest.config.js` 中的基础版本与 GitHub Actions 运行编号组成，例如 `7.7.3.4`。CI 将编号写入构建产物。重新运行同一次工作流会保留已发布的安装包。版本每段的上限为 65535，调整基础版本后应确保新版本号严格递增。
+正式版使用 `manifest.config.js` 中的版本号。发布新版本时先更新该版本号，再合入 `master`。CI 自动测试、打包并发布同名标签，例如 `v7.7.7`。已有正式版的安装包会保留。
 
 工作流需要仓库允许 GitHub Actions，以及 `GITHUB_TOKEN` 的 `contents: write` 权限，不需要额外的 GitHub Token。若 fork 默认禁用了 Actions，请在仓库 Actions 页面启用。
 

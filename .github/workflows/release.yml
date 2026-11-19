@@ -42,6 +42,10 @@ jobs:
       - run: node scripts/test_bookmark_organization.cjs
       - run: node scripts/smoke_bookmark_recovery.cjs
       - run: node scripts/test_visit_preview.cjs
+      - run: node scripts/test_visit_preview_early.cjs
+      - run: node scripts/test_manual_preview_early.cjs
+      - run: node scripts/test_visit_preview_redirects.cjs
+      - run: node scripts/test_settings_drawer.cjs
 
   release:
     needs: test-edge
@@ -51,7 +55,6 @@ jobs:
     env:
       PUPPETEER_SKIP_DOWNLOAD: 'true'
       PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
-      RELEASE_BUILD: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

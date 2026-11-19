@@ -1,5 +1,6 @@
 // Exercise the production worker as an ES module, with no pre-existing `browser` global.
 const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
@@ -13,8 +14,9 @@ async function check(existingBrowser = false) {
   const api = {
     i18n: { getMessage: key => key },
     runtime: { getURL: path => `chrome-extension://test-extension/${path}`,
-      onInstalled: event('installed'), onMessage: event('message') },
+      onInstalled: event('installed'), onMessage: event('message'), onConnect: event('connect') },
     storage: { onChanged: event('storage') },
+    permissions: { onRemoved: event('permissionRemoved') },
     bookmarks: Object.fromEntries(['onCreated', 'onChanged', 'onRemoved', 'onMoved', 'onImportBegan', 'onImportEnded']
       .map(name => [name, event(name)])),
     contextMenus: { onClicked: event('contextMenu') },
@@ -33,12 +35,14 @@ async function check(existingBrowser = false) {
   };
   const context = vm.createContext({ chrome: api, console, crypto: webcrypto, setTimeout, clearTimeout,
     ...(existingBrowser ? { browser: api } : {}) });
-  const worker = new vm.SourceTextModule(readFileSync('extension_chrome/background.js', 'utf8'), { context });
+  const build = process.env.VB_TEST_EXTENSION || 'extension_chrome';
+  const worker = new vm.SourceTextModule(readFileSync(join(build, 'background.js'), 'utf8'), { context });
   await worker.link(() => { throw Error('Unexpected external dependency in worker'); });
   await worker.evaluate();
   assert.equal(context.browser, api);
   assert.equal(typeof listeners.installed, 'function');
   assert.equal(typeof listeners.action, 'function');
+  assert.equal(typeof listeners.connect, 'function');
   assert.equal(typeof listeners.tabUpdated, 'function');
   assert.equal(typeof listeners.tabActivated, 'function');
   assert.equal(typeof listeners.windowFocus, 'function');
@@ -59,6 +63,8 @@ async function check(existingBrowser = false) {
 (async () => {
   await check();
   await check(true);
+  await require('./smoke_preview_cleanup.cjs')();
   await require('./smoke_visit_preview.cjs')();
+  await require('./smoke_site_icons.cjs')();
   console.log('PASS: production module startup, event registration, toolbar opening and page reuse');
 })().catch(error => { console.error(error); process.exitCode = 1; });

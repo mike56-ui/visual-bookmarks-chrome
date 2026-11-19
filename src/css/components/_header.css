@@ -396,6 +396,14 @@ body[data-folder-dock] .search-actions [hidden] { display: none; }
 .newtab-actions__list > :hover,
 .newtab-actions__list > :focus-within { background: var(--surface-hover); }
 .newtab-actions__option input { accent-color: var(--focus-color); }
+.newtab-actions__option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.newtab-actions__list [hidden] { display: none; }
+.newtab-actions__list button:disabled { opacity: .55; cursor: default; }
 
 @media (max-width: 460px) {
   .newtab-toolbar { gap: 5px; }

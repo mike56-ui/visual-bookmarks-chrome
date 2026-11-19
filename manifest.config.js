@@ -9,7 +9,7 @@ const common = {
   default_locale: 'en',
   name: '__MSG_ext_name__',
   description: '__MSG_ext_desc__',
-  version: releaseBuild ? `7.7.3.${releaseBuild}` : '7.7.3',
+  version: releaseBuild ? `7.7.7.${releaseBuild}` : '7.7.7',
   icons: {
     16: 'icons/icon16.png',
     48: 'icons/icon48.png',

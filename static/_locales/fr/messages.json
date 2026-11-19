@@ -283,7 +283,7 @@
     "message": "Afficher le titre du favori"
   },
   "show_favicon": {
-    "message": "Afficher la favicône à côté du titre"
+    "message": "Afficher les icônes des sites sur les favoris"
   },
   "open_link_newtab": {
     "message": "Ouvrir les favoris et la recherche dans un nouvel onglet"

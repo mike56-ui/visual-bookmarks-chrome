@@ -6,6 +6,27 @@ const MAX_ATTEMPTS = 3;
 const nextTry = new Map();
 const approvedTypes = new Set(['image/png', 'image/webp', 'image/jpeg', 'image/svg+xml',
   'image/x-icon', 'image/vnd.microsoft.icon']);
+const githubPages = new Set(['github.com', 'www.github.com']);
+const publicHostname = /^(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z](?:[a-z\d-]{0,61}[a-z\d])?$/i;
+const localHostname = /(?:^|\.)(?:localhost|local|internal|lan|corp|home|test|invalid|example|onion)$/i;
+const staticImagePath = /\.(?:ico|svg|png|webp|jpe?g)$/i;
+
+function iconTarget(origin, declared) {
+  if (typeof declared !== 'string' || declared.length > 2048 || !siteOrigin(declared)) return;
+  const icon = new URL(declared);
+  icon.hash = '';
+  if (icon.origin === origin) return { url: icon.href, cdn: false };
+
+  const page = new URL(origin);
+  if (icon.protocol !== 'https:' || page.port || icon.port || icon.search || !staticImagePath.test(icon.pathname)
+    || !publicHostname.test(icon.hostname) || localHostname.test(icon.hostname)
+    || !publicHostname.test(page.hostname) || localHostname.test(page.hostname)) return;
+
+  // An arbitrary link in an editable page is not sufficient to authorize a cross-origin fetch.
+  const knownGitHubAsset = githubPages.has(page.hostname) && icon.hostname === 'github.githubassets.com'
+    && /^\/favicons\/favicon(?:-[a-z\d_-]+)?\.(?:svg|png|ico)$/i.test(icon.pathname);
+  if (knownGitHubAsset || icon.hostname.endsWith('.' + page.hostname)) return { url: icon.href, cdn: true };
+}
 
 function declarationScore({ url, sizes, type }) {
   if (type === 'image/svg+xml' || /\.svg(?:$|[?#])/i.test(url)) return 1024;
@@ -14,17 +35,22 @@ function declarationScore({ url, sizes, type }) {
   return Math.min(768, Math.max(0, ...possibleSizes)) || 32;
 }
 
-async function fetchImage(url) {
+async function fetchImage(url, cdn) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
   let reader;
   try {
-    const response = await fetch(url, {
-      credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error', signal: controller.signal
+    const request = new Request(url, {
+      credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error', signal: controller.signal,
+      ...(cdn && { targetAddressSpace: 'public' })
     });
+    // On browsers without an address-space guard, leave cross-origin icons to their native favicon cache.
+    if (cdn && request.targetAddressSpace !== 'public') return;
+    const response = await fetch(request);
     const type = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
     const length = Number(response.headers.get('content-length'));
-    if (!response.ok || !approvedTypes.has(type) || length > MAX_ICON_BYTES || !response.body) return;
+    if (!response.ok || response.redirected || response.url !== request.url
+      || !approvedTypes.has(type) || length > MAX_ICON_BYTES || !response.body) return;
     reader = response.body.getReader();
     const parts = [];
     let total = 0;
@@ -70,14 +96,15 @@ export async function cacheDeclaredSiteIcon(pageUrl, declarations, current, isAu
   if (cached && Date.now() - cached.updated < RECHECK_INTERVAL) return;
   const unique = new Map();
   for (const declaration of declarations) {
-    if (siteOrigin(declaration.url) === origin) unique.set(declaration.url, declaration);
+    const target = iconTarget(origin, declaration.url);
+    if (target) unique.set(target.url, { ...declaration, ...target });
   }
   const candidates = [...unique.values()].sort((a, b) => declarationScore(b) - declarationScore(a));
   let best;
-  for (const { url } of candidates.slice(0, MAX_ATTEMPTS)) {
+  for (const { url, cdn } of candidates.slice(0, MAX_ATTEMPTS)) {
     if (!current() || !await isAuthorized() || !current()) return;
     try {
-      const blob = await fetchImage(url);
+      const blob = await fetchImage(url, cdn);
       if (!blob?.size) continue;
       const image = await imageDetails(blob);
       if (image && (!best || best.score < image.score)) best = image;

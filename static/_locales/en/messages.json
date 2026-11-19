@@ -89,7 +89,10 @@
     "message": "Edit"
   },
   "contextmenu_capture": {
-    "message": "Refresh thumbnail"
+    "message": "Update this bookmark’s thumbnail"
+  },
+  "bookmark_actions": {
+    "message": "Bookmark actions"
   },
   "contextmenu_upload": {
     "message": "Upload from computer"
@@ -104,7 +107,7 @@
     "message": "Delete image ?"
   },
   "confirm_delete_images": {
-    "message": "Are you sure? All local images will be deleted"
+    "message": "Clear thumbnails and the local background? Your bookmarks will be kept."
   },
   "confirm_delete_bookmark": {
     "message": "Are you sure you want to delete the bookmark ?"
@@ -126,6 +129,18 @@
   },
   "notice_thumb_image_updated": {
     "message": "Bookmark thumb has been updated"
+  },
+  "notice_thumb_unchanged": {
+    "message": "The thumbnail is unchanged."
+  },
+  "notice_thumb_custom_kept": {
+    "message": "Your custom cover was kept."
+  },
+  "notice_thumb_busy": {
+    "message": "A thumbnail update is already running."
+  },
+  "notice_thumb_capture_failed": {
+    "message": "Could not update the thumbnail. Try again."
   },
   "notice_bookmark_exist": {
     "message": "Bookmark already exists"
@@ -208,10 +223,10 @@
     "message": "Edit bookmark"
   },
   "options": {
-    "message": "Options"
+    "message": "Settings"
   },
   "view_setting": {
-    "message": "View"
+    "message": "Appearance"
   },
   "general_setting": {
     "message": "General"
@@ -220,16 +235,37 @@
     "message": "Advanced"
   },
   "dial_width": {
-    "message": "Panel width"
+    "message": "Bookmark area width"
   },
   "number_of_columns": {
-    "message": "Number of Columns"
+    "message": "Bookmarks per row"
+  },
+  "settings_automatic": {
+    "message": "Automatic"
+  },
+  "settings_frequent_first": {
+    "message": "Most used first"
+  },
+  "settings_visit_preview": {
+    "message": "Save a thumbnail when bookmarking"
+  },
+  "settings_visit_permission": {
+    "message": "Site access is required to enable this setting"
+  },
+  "settings_visit_error": {
+    "message": "Could not change thumbnail settings. Try again."
+  },
+  "settings_manual_preview_delay": {
+    "message": "Allow more time for slow pages to load."
+  },
+  "settings_manual_preview_nested": {
+    "message": "Include subfolders when updating manually"
   },
   "vertical_center": {
     "message": "Vertical centering"
   },
   "default_folder_id": {
-    "message": "Default Folder to Show"
+    "message": "Default folder"
   },
   "background": {
     "message": "Background"
@@ -277,7 +313,7 @@
     "message": "Show the settings icon"
   },
   "show_toolbar": {
-    "message": "Show search bar and folder selection"
+    "message": "Show search bar"
   },
   "show_create_column": {
     "message": "Show column for adding a bookmark"
@@ -286,7 +322,7 @@
     "message": "Show bookmark title"
   },
   "show_favicon": {
-    "message": "Show the Favicon next to the title"
+    "message": "Show site icons on bookmark cards"
   },
   "open_link_newtab": {
     "message": "Open bookmarks and search in a new tab"
@@ -307,7 +343,7 @@
     "message": "Advanced settings"
   },
   "clear_background_locals": {
-    "message": "Clear folder with local images"
+    "message": "Clear thumbnails and local background"
   },
   "reset_local_default": {
     "message": "Reset Local Settings to Default Values"
@@ -316,7 +352,7 @@
     "message": "Delete Synchronized Data from Server"
   },
   "option_not_sync": {
-    "message": "Option is not synchronized"
+    "message": "Saved on this device only"
   },
   "custom_style": {
     "message": "Custom CSS"
@@ -454,7 +490,7 @@
     "message": "Sort by type"
   },
   "sort_by": {
-    "message": "Sort by"
+    "message": "Default bookmark order"
   },
   "sort_by_date": {
     "message": "Date"
@@ -570,7 +606,7 @@
     "message": "Why use this permission?"
   },
   "host_permissions_info": {
-    "message": "<p>This permission is necessary for generating website screenshots. The extension does not collect, track, or modify your data on websites. The only modification that occurs after opening a separate window with the website is hiding the scroll bar on the site before generating the screenshot (to make the screenshot as scroll-bar-free as possible). The extension code is available on <a href=\"https://github.com/k-ivan/visual-bookmarks-chrome\" target=\"_blank\">Github</a>. If you are concerned about this permission, you can choose not to grant it, the extension will still function without it, but generating website screenshots for bookmarks will not be available.</p><p>This permission will be requested when attempting to take a website screenshot (if it is disabled). You can also manage this right in the browser settings by opening a window with detailed information about the extension.</p><p>Usually, in browsers like Chrome and Edge, this permission is enabled by default, while in Firefox, it is disabled. Therefore, default behavior may vary depending on the browser.</p>"
+    "message": "<p>Site access is optional. With it, the extension can save the first thumbnail if enabled, update thumbnails when requested, and read website icons. Thumbnails are stored in this browser. You can revoke site access in your browser’s extension settings.</p>"
   },
   "example_string": {
     "message": "Example: $string$",

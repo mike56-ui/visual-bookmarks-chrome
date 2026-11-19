@@ -31,12 +31,12 @@
 
 body[data-folder-dock] .container {
   width: 100%;
-  max-width: none;
+  max-width: var(--dock-container-width, none);
   padding-inline: clamp(24px, 4vw, 64px);
 }
 
 body[data-folder-dock] .grid {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 148px), 1fr));
+  grid-template-columns: repeat(var(--dock-grid-columns, auto-fill), minmax(min(100%, var(--dock-grid-min-width, 148px)), 1fr));
   gap: 24px 16px;
   align-items: start;
 }

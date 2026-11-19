@@ -52,7 +52,10 @@ class VbContextMenu extends HTMLElement {
       class: 'context-menu'
     });
     this.menuNode = $createElement('ul', {
-      class: 'context-menu__list'
+      class: 'context-menu__list',
+      id: 'bookmarkActionsMenu',
+      role: 'menu',
+      'aria-label': browser.i18n.getMessage('bookmark_actions') || 'Bookmark actions'
     });
     this.containerNode.append(this.menuNode);
     this.append(this.containerNode);
@@ -63,13 +66,14 @@ class VbContextMenu extends HTMLElement {
       const isDisabled = item.disabled ? 'is-disabled' : '';
 
       if (item.divider) {
-        return '<li class="context-menu__item context-menu__item--divider"></li>';
+        return '<li class="context-menu__item context-menu__item--divider" role="separator"></li>';
       }
-      return `<li class="context-menu__item">
-          <a class="context-menu__link ${ isDisabled }" data-action="${ item.action }">
-            <span class="context-menu__icon">${ item.icon ? item.icon : '' }</span>
-            <span class="">${ item.title }</span>
-          </a>
+      return `<li class="context-menu__item" role="none">
+          <button class="context-menu__link ${ isDisabled }" type="button" role="menuitem" tabindex="-1"
+            data-action="${ item.action }" ${item.disabled ? 'disabled' : ''}>
+            <span class="context-menu__icon" aria-hidden="true">${ item.icon ? item.icon : '' }</span>
+            <span>${ item.title }</span>
+          </button>
         </li>`;
     }).join('');
     this.menuNode.innerHTML = list;
@@ -80,8 +84,8 @@ class VbContextMenu extends HTMLElement {
     this.menuInstance.close();
   }
 
-  trigger(event) {
-    this.menuInstance.handlerTrigger(event);
+  trigger(event, anchor) {
+    this.menuInstance.handlerTrigger(event, anchor);
   }
 
   handleMenuOpen(evt) {

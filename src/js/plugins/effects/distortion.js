@@ -6,8 +6,11 @@ class DistortionImage {
    * @type {HTMLCanvasElement|null}
    */
   #canvas = null;
+  #lifetime = new AbortController();
+  #frame = 0;
+  #buffer = null;
 
-  constructor(imageUrl) {
+  constructor(image) {
     this.#canvas = $createElement('canvas');
     this.gl = this.canvas.getContext('webgl');
 
@@ -19,10 +22,14 @@ class DistortionImage {
     this.attribs = {};
     this.uniforms = {};
     this.texture = null;
-    this.imageSize = [1, 1];
     this.startTime = performance.now();
 
-    this.init(imageUrl);
+    try {
+      this.init(image);
+    } catch (error) {
+      this.destroy();
+      throw error;
+    }
   }
 
   get canvas() {
@@ -45,15 +52,40 @@ class DistortionImage {
     // Full-screen quad
     this.initQuad();
 
-    // Load texture
-    // await this.loadTexture(imageUrl);
     this.loadTexture(image);
 
-    // Resize and rendering
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    const { signal } = this.#lifetime;
+    window.addEventListener('resize', () => this.resize(), { signal });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.stopFrame();
+      else this.queueFrame();
+    }, { signal });
+    this.queueFrame();
+  }
 
-    requestAnimationFrame((t) => this.draw(t));
+  queueFrame() {
+    if (this.#frame || document.hidden || this.#lifetime.signal.aborted) return;
+    this.#frame = requestAnimationFrame(time => {
+      this.#frame = 0;
+      this.draw(time);
+    });
+  }
+
+  stopFrame() {
+    cancelAnimationFrame(this.#frame);
+    this.#frame = 0;
+  }
+
+  destroy() {
+    if (this.#lifetime.signal.aborted) return;
+    this.#lifetime.abort();
+    this.stopFrame();
+    const gl = this.gl;
+    if (this.#buffer) gl.deleteBuffer(this.#buffer);
+    if (this.texture) gl.deleteTexture(this.texture);
+    if (this.program) gl.deleteProgram(this.program);
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 
   vertexShaderSource() {
@@ -143,6 +175,7 @@ class DistortionImage {
   createShader(type, src) {
     const gl = this.gl;
     const shader = gl.createShader(type);
+    if (!shader) return null;
     gl.shaderSource(shader, src);
     gl.compileShader(shader);
 
@@ -158,25 +191,27 @@ class DistortionImage {
     const gl = this.gl;
     const vs = this.createShader(gl.VERTEX_SHADER, vsSrc);
     const fs = this.createShader(gl.FRAGMENT_SHADER, fsSrc);
-
-    const program = gl.createProgram();
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-
-    gl.linkProgram(program);
-
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error('Program link failed:\n', gl.getProgramInfoLog(program));
-      gl.deleteProgram(program);
-      return null;
+    let program;
+    try {
+      if (!vs || !fs) throw new Error('Could not compile background shaders');
+      program = gl.createProgram();
+      if (!program) throw new Error('Could not allocate background shader program');
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(program) || 'Could not link background shaders');
+      }
+      gl.detachShader(program, vs);
+      gl.detachShader(program, fs);
+      return program;
+    } catch (error) {
+      if (program) gl.deleteProgram(program);
+      throw error;
+    } finally {
+      if (vs) gl.deleteShader(vs);
+      if (fs) gl.deleteShader(fs);
     }
-
-    gl.detachShader(program, vs);
-    gl.detachShader(program, fs);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-
-    return program;
   }
 
   initQuad() {
@@ -191,8 +226,9 @@ class DistortionImage {
       1,  1
     ]);
 
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    this.#buffer = gl.createBuffer();
+    if (!this.#buffer) throw new Error('Could not allocate background geometry');
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.#buffer);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
 
     gl.enableVertexAttribArray(this.attribs.a_position);
@@ -212,16 +248,9 @@ class DistortionImage {
   }
 
   loadTexture(img) {
-    // return new Promise((resolve) => {
     const gl = this.gl;
-    // const img = new Image();
-    // img.crossOrigin = 'anonymous';
-    // img.src = url;
-
-    // img.onload = () => {
-    this.imageSize = [img.width, img.height];
-
     const tex = gl.createTexture();
+    if (!tex) throw new Error('Could not allocate background texture');
     this.texture = tex;
 
     gl.activeTexture(gl.TEXTURE0);
@@ -234,17 +263,13 @@ class DistortionImage {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
     gl.uniform1i(this.uniforms.u_texture, 0);
-    gl.uniform2f(this.uniforms.u_imageSize, img.width, img.height);
-
-    // resolve();
-    // };
-    // });
+    gl.uniform2f(this.uniforms.u_imageSize, img.naturalWidth, img.naturalHeight);
   }
 
   resize() {
     const gl = this.gl;
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = window.innerWidth;
     const h = window.innerHeight;
 
@@ -260,6 +285,7 @@ class DistortionImage {
 
   draw(t) {
     const gl = this.gl;
+    if (this.#lifetime.signal.aborted || document.hidden || gl.isContextLost()) return;
 
     // wrap time every few minutes
     let time = (t - this.startTime) * 0.001;
@@ -274,7 +300,7 @@ class DistortionImage {
     gl.uniform1f(this.uniforms.u_time, time);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    requestAnimationFrame((t) => this.draw(t));
+    this.queueFrame();
   }
 }
 

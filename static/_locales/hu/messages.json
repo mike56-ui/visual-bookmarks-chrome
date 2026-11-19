@@ -283,7 +283,7 @@
     "message": "Könyvjelző címének megjelenítése"
   },
   "show_favicon": {
-    "message": "A kedvencek ikon megjelenítése a cím mellett"
+    "message": "Webhelyikonok megjelenítése a könyvjelzőkártyákon"
   },
   "open_link_newtab": {
     "message": "Nyissa meg a könyvjelzőket, és keressen egy új lapon"
