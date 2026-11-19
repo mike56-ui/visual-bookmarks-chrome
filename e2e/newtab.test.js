@@ -56,6 +56,8 @@ describe('Chromium real-bookmark dock workflow', () => {
     extPage = context.extPage;
     browser = context.browser;
     extPage.on('pageerror', error => pageErrors.push(error.message));
+    // The drag assertions below measure the regular-motion experience on any Windows runner.
+    await extPage.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
     await extPage.setViewport({ width: 1440, height: 900 });
 
     data = await extPage.evaluate(async(prefix) => {
