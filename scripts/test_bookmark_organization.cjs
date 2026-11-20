@@ -23,12 +23,11 @@ function chromium() {
     args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension]
   });
   try {
-    const worker = await browser.waitForTarget(target => target.type() === 'service_worker', { timeout: 12000 });
     const page = await browser.newPage();
     await page.setViewport({ width: 1440, height: 900 });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.goto(worker.url().split('/').slice(0, 3).join('/') + '/newtab.html');
+    await page.goto('chrome://newtab/');
     await page.waitForSelector('[data-folder-kind="unfiled"]');
     const data = await page.evaluate(async() => {
       const [{ children:[bar] }] = await chrome.bookmarks.getTree();
@@ -87,10 +86,20 @@ function chromium() {
       { timeout: 5000 }, latest);
       await page.click(latest + ' .toast__action');
     };
+    const undoSort = async() => {
+      await page.waitForFunction(() => window.organizationCanUndo && !document.querySelector('#bookmarks.has-dragging'));
+      await page.focus('#folderDockHandle');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('z');
+      await page.keyboard.up('Control');
+    };
     const drag = async(source, target, xRatio = 0.8, yRatio = 0.5) => {
       await page.evaluate(() => {
         window.organizationTrace = [];
         if (window.organizationTraceObserver) return;
+        document.addEventListener('bookmark-order-undo-state', event => {
+          window.organizationCanUndo = event.detail.available;
+        });
         const grid = document.getElementById('bookmarks');
         window.organizationTraceObserver = new MutationObserver(() => window.organizationTrace.push({
           busy: grid.hasAttribute('aria-busy'), dragging: document.body.classList.contains('motion-drag-active')
@@ -133,7 +142,7 @@ function chromium() {
     const synced = [...original];
     synced.splice(1, 3, data.second, data.third, data.first);
     assert.deepEqual(await raw(data.a), synced, 'compatible reordering preserves folders at exact native slots');
-    await latestUndo();
+    await undoSort();
     await waitGrid([data.first, data.second, data.third]);
     assert.deepEqual(await raw(data.a), original);
 
@@ -143,8 +152,8 @@ function chromium() {
     await page.reload();
     await waitGrid([data.second, data.third, data.fourth, data.first]);
     assert.equal(await page.$eval('#bookmarks', node => node.dataset.orderMode), 'manual');
-    await page.click('#newtabActionsToggle');
-    await page.click('[data-newtab-action="common-order"]');
+    // Restore the persisted per-folder display order through its compatibility command.
+    await page.evaluate(() => document.dispatchEvent(new Event('newtab:restore-common-order')));
     await waitGrid([data.first, data.second, data.third]);
     assert.equal(await page.$eval('#bookmarks', node => node.dataset.orderMode), 'common');
 
@@ -173,12 +182,22 @@ function chromium() {
 
     const rootBefore = await leftOrder();
     const index = rootBefore.indexOf(data.b);
+    await page.evaluate(id => {
+      window.unaffectedFolderIcons = [...document.querySelectorAll('[data-folder-id="' + id + '"] .site-icon__image')];
+    }, data.a);
     await drag(folder(data.c) + ' .folder-card__open', folder(data.b) + ' .folder-card__open', 0.5, 0.2);
     await page.waitForFunction(({ id, index }) => document.querySelectorAll('#folderDockList .folder-card')[index]
       ?.dataset.folderId === id, { timeout: 8000 }, { id: data.c, index });
     const dataAfter = await leftOrder();
     assert.ok(dataAfter.indexOf(data.marker0) > dataAfter.indexOf(data.a));
     assert.deepEqual(await raw(data.bar), initialBar, 'left display sorting does not change the native tree');
+    assert.equal(await page.evaluate(() => window.unaffectedFolderIcons.every(node => node.isConnected)), true);
+    await undoSort();
+    await page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('#folderDockList .folder-card')]
+      .map(node => node.dataset.folderId)) === JSON.stringify(expected), { timeout: 8000 }, rootBefore);
+    await drag(folder(data.c) + ' .folder-card__open', folder(data.b) + ' .folder-card__open', 0.5, 0.2);
+    await page.waitForFunction(({ id, index }) => document.querySelectorAll('#folderDockList .folder-card')[index]
+      ?.dataset.folderId === id, { timeout: 8000 }, { id: data.c, index });
     await page.reload();
     await page.waitForSelector(folder(data.c));
     assert.deepEqual(await leftOrder(), dataAfter);
@@ -190,9 +209,50 @@ function chromium() {
     await waitGrid([data.first, data.second, data.third]);
     assert.equal(await page.$eval('#bookmarks', node => node.dataset.orderMode), 'manual');
     assert.deepEqual(await raw(data.a), original, 'usage-ranked sort never rewrites native bookmarks');
-    await latestUndo();
+    await undoSort();
     await waitGrid([data.third, data.first, data.second]);
     assert.equal(await page.$eval('#bookmarks', node => node.dataset.orderMode), 'common');
+
+    // In a horizontal dock, the right half of Beta means "after", even above its midline.
+    const handle = await page.$eval('#folderDockHandle', node => {
+      const box = node.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    });
+    await page.mouse.move(handle.x, handle.y);
+    await page.mouse.down();
+    await page.mouse.move(720, 8, { steps: 14 });
+    await page.mouse.up();
+    await page.waitForSelector('#folderDock[data-dock="top"]');
+    await drag(folder(data.c) + ' .folder-card__open', folder(data.b) + ' .folder-card__open', 0.8, 0.25);
+    await page.waitForFunction(({b, c}) => {
+      const ids = [...document.querySelectorAll('#folderDockList .folder-card')].map(item => item.dataset.folderId);
+      return ids.indexOf(c) === ids.indexOf(b) + 1;
+    }, { timeout: 8000 }, data);
+    const lastFolder = await page.evaluate(async parentId => {
+      const folders = await Promise.all(Array.from({length: 16}, (_, i) => chrome.bookmarks.create({
+        parentId, title: 'Horizontal scroll ' + i
+      })));
+      return folders.at(-1).id;
+    }, data.bar);
+    await page.waitForSelector(folder(lastFolder));
+    const list = await page.$eval('#folderDockList', node => {
+      node.scrollLeft = 0;
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, y: box.top + box.height / 2 };
+    });
+    await page.mouse.move(list.left + 50, list.y);
+    await page.mouse.wheel({ deltaY: 180 });
+    await page.waitForFunction(() => document.querySelector('#folderDockList').scrollLeft > 20);
+    await page.$eval(folder(data.b), item => item.scrollIntoView({block: 'nearest', inline: 'center'}));
+    const start = await (await page.$(folder(data.b) + ' .folder-card__open')).boundingBox();
+    const beforeScroll = await page.$eval('#folderDockList', node => node.scrollLeft);
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(list.right - 12, list.y, {steps: 14});
+    await page.waitForFunction(before => document.querySelector('#folderDockList').scrollLeft > before + 40,
+      { timeout: 5000 }, beforeScroll);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
     assert.deepEqual(errors, []);
 
     console.log('PASS: pointer-driven partial-grid reorder, native folder slots, saved local order, common restore, multiselect move, counts, undo, and left order.');

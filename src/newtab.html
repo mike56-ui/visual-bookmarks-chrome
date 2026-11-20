@@ -23,48 +23,63 @@
       <button class="folder-dock__add" id="folderDockAdd" type="button" aria-label="新建文件夹" title="新建文件夹">+</button>
     </div>
     <nav class="folder-dock__list" id="folderDockList" aria-label="Bookmark folders"></nav>
-    <button class="folder-dock__resize" id="folderDockResize" type="button" aria-label="Resize folder panel" title="Drag or use arrow keys"></button>
+    <span class="folder-dock__resize" data-resize-edge="n" aria-hidden="true"></span>
+    <span class="folder-dock__resize" data-resize-edge="ne" aria-hidden="true"></span>
+    <span class="folder-dock__resize" data-resize-edge="e" aria-hidden="true"></span>
+    <button class="folder-dock__resize" data-resize-edge="se" id="folderDockResize" type="button" aria-label="Resize folder panel" title="Drag or use arrow keys"></button>
+    <span class="folder-dock__resize" data-resize-edge="s" aria-hidden="true"></span>
+    <span class="folder-dock__resize" data-resize-edge="sw" aria-hidden="true"></span>
+    <span class="folder-dock__resize" data-resize-edge="w" aria-hidden="true"></span>
+    <span class="folder-dock__resize" data-resize-edge="nw" aria-hidden="true"></span>
   </aside>
 
-  <main id="main" class="app">
-    <div class="container">
-      <div class="newtab-toolbar">
+  <div class="bookmark-workspace">
+    <div class="workspace-toolbar-frame">
+      <div class="newtab-toolbar container">
         <button class="newtab-toolbar__button" id="folderDockToggle" type="button" aria-expanded="false" aria-controls="folderDock" hidden>
           <svg width="19" height="19" aria-hidden="true"><use href="/img/symbol.svg#bookmarks"></use></svg>
         </button>
         <header></header>
-        <div class="newtab-actions" id="newtabActions">
-          <button class="newtab-toolbar__button" id="newtabActionsToggle" type="button" aria-expanded="false" aria-controls="newtabActionsList" aria-label="More actions" title="More actions">
-            <span aria-hidden="true">···</span>
-          </button>
-          <div class="newtab-actions__list" id="newtabActionsList" hidden>
-            <button type="button" data-newtab-action="add" data-locale-message="add_bookmark">Add bookmark</button>
-            <label class="newtab-actions__option">
-              <input type="checkbox" id="visitPreviewEnabled">
-              <span id="visitPreviewLabel">Update previews when visiting</span>
-            </label>
-            <button type="button" data-newtab-action="reset">Reset folder panel</button>
-            <button type="button" data-newtab-action="common-order" hidden>Restore frequently used order</button>
-            <a href="/options.html" data-locale-message="options">Settings</a>
+        <button class="newtab-toolbar__button" id="newtabActionsToggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="settingsDrawer" aria-label="Settings" title="Settings">
+          <svg width="20" height="20" aria-hidden="true"><use href="/img/symbol.svg#settings"></use></svg>
+        </button>
+      </div>
+    </div>
+    <main id="main" class="app">
+      <div class="container">
+        <div class="content" id="content">
+          <div class="grid" id="bookmarks"></div>
+          <section class="bing-results" id="bingResults" aria-labelledby="bingHeading" hidden>
+            <div class="bing-results__header">
+              <h2 id="bingHeading" data-locale-message="bing_results_heading">Bing web results</h2>
+              <a id="bingMore" target="_blank" rel="noopener noreferrer" data-locale-message="bing_more_results">More on Bing</a>
+            </div>
+            <p id="bingStatus" role="status"></p>
+            <button id="bingPermission" type="button" data-locale-message="bing_enable" hidden>Enable Bing search</button>
+            <div class="bing-results__list" id="bingResultList"></div>
+          </section>
+          <div id="dial_loading" class="dial-loading" hidden>
+            <svg class="loading" id="loading" viewBox="0 0 100 100">
+              <defs>
+                <lineargradient id="gradient">
+                  <stop offset="5%"  stop-color="#4285f4"/>
+                  <stop offset="95%" stop-color="#b96bd6"/>
+                </lineargradient>
+              </defs>
+              <circle class="path" fill="none" stroke="url(#gradient)" stroke-width="8" stroke-linecap="round" cx="50" cy="50" r="40"></circle>
+            </svg>
           </div>
         </div>
       </div>
-      <div class="content" id="content">
-        <div class="grid" id="bookmarks"></div>
-        <div id="dial_loading" class="dial-loading" hidden>
-          <svg class="loading" id="loading" viewBox="0 0 100 100">
-            <defs>
-              <lineargradient id="gradient">
-                <stop offset="5%"  stop-color="#4285f4"/>
-                <stop offset="95%" stop-color="#b96bd6"/>
-              </lineargradient>
-            </defs>
-            <circle class="path" fill="none" stroke="url(#gradient)" stroke-width="8" stroke-linecap="round" cx="50" cy="50" r="40"></circle>
-          </svg>
-        </div>
-      </div>
-    </div>
-  </main>
+    </main>
+  </div>
+  <dialog class="settings-drawer" id="settingsDrawer" aria-labelledby="settingsDrawerTitle">
+    <header class="settings-drawer__header">
+      <h1 id="settingsDrawerTitle" data-locale-message="options">Settings</h1>
+      <button class="settings-drawer__close" type="button" aria-label="Close" data-locale-message="btn_close.aria-label" autofocus>×</button>
+    </header>
+    <iframe class="settings-drawer__frame" title="Settings"></iframe>
+  </dialog>
   <div class="bg sticky" id="bg"></div>
   <div class="gmodal" id="modal">
     <div class="gmodal__container has-center">

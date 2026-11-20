@@ -1,19 +1,16 @@
-import { containsPermissions, requestPermissions } from '../api/permissions';
-import { storage } from '../api/storage';
-import Toast from './toast';
-
 const POSITION_KEY = 'visual-bookmarks-folder-panel';
 const MARGIN = 16;
+const SNAP_DISTANCE = 38;
 const DEFAULT_WIDTH = 268;
-const TOOLBAR_CLEARANCE = 72;
-const MIN_WIDTH = 220;
-const MIN_HEIGHT = 220;
-const MAX_WIDTH = 460;
+const DEFAULT_HEIGHT = 580;
+const MAX_SIDE_WIDTH = 460;
+const GEOMETRY = ['x', 'y', 'width', 'height'];
+const SIDES = ['left', 'right', 'top', 'bottom'];
 
 function readPosition() {
   try {
     const state = JSON.parse(localStorage.getItem(POSITION_KEY));
-    return state && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(state[key])) ? state : null;
+    return state && GEOMETRY.every(key => Number.isFinite(state[key])) ? state : null;
   } catch {
     return null;
   }
@@ -23,203 +20,277 @@ function isChinese() {
   return document.documentElement.lang.startsWith('zh');
 }
 
-function setupActions(resetPanel) {
-  const actions = document.getElementById('newtabActions');
-  const toggle = document.getElementById('newtabActionsToggle');
-  const list = document.getElementById('newtabActionsList');
-  const optIn = document.getElementById('visitPreviewEnabled');
-  const reset = list.querySelector('[data-newtab-action="reset"]');
-  const restoreOrder = list.querySelector('[data-newtab-action="common-order"]');
-  const close = focus => {
-    if (list.hidden) return;
-    list.hidden = true;
-    toggle.setAttribute('aria-expanded', 'false');
-    if (focus) toggle.focus();
-  };
+function isHorizontal(side) {
+  return side === 'top' || side === 'bottom';
+}
 
-  if (isChinese()) {
-    toggle.setAttribute('aria-label', '更多操作');
-    toggle.title = '更多操作';
-    document.getElementById('visitPreviewLabel').textContent = '访问时更新预览';
-    reset.textContent = '复位文件夹面板';
-    restoreOrder.textContent = '恢复常用排序';
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function viewport() {
+  return { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight };
+}
+
+function sizeLimits(horizontal, view) {
+  const maxWidth = horizontal ? view.width - MARGIN * 2 : Math.min(MAX_SIDE_WIDTH, view.width - 360);
+  const maxHeight = horizontal ? Math.floor(view.height * 0.48) : view.height - MARGIN * 2;
+  return { minWidth: 220, maxWidth, minHeight: horizontal ? 148 : 220, maxHeight };
+}
+
+function closerSide(offset, length, available, first, last, previous) {
+  const balance = 2 * offset + length - available;
+  if (!balance && previous === last) return last;
+  return balance > 0 ? last : first;
+}
+
+// Fit restored coordinates before deciding which side has room for the bookmarks.
+function fit(rect, side, view) {
+  const limits = sizeLimits(isHorizontal(side), view);
+  const width = clamp(rect.width, limits.minWidth, limits.maxWidth);
+  const height = clamp(rect.height, limits.minHeight, limits.maxHeight);
+  const x = clamp(rect.x, MARGIN, view.width - width - MARGIN);
+  const y = clamp(rect.y, MARGIN, view.height - height - MARGIN);
+  const dock = isHorizontal(side) ? closerSide(y, height, view.height, 'top', 'bottom', side) :
+    closerSide(x, width, view.width, 'left', 'right', side);
+  return { x, y, width, height, dock };
+}
+
+// Move the selected edge only. Once it reaches its limit the opposite edge stays fixed.
+function resizeRect(rect, edge, dx, dy, view) {
+  const { minWidth, maxWidth, minHeight, maxHeight } = sizeLimits(isHorizontal(rect.dock), view);
+  let { x, y, width, height } = rect;
+  if (edge.includes('w')) {
+    width = clamp(width - dx, minWidth, Math.min(maxWidth, x + width - MARGIN));
+    x += rect.width - width;
   }
-  toggle.addEventListener('click', () => {
-    if (!list.hidden) {
-      close(false);
-    } else {
-      list.hidden = false;
-      toggle.setAttribute('aria-expanded', 'true');
-    }
-  });
-  document.addEventListener('pointerdown', event => {
-    if (!actions.contains(event.target)) close(false);
-  });
-  actions.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !list.hidden) {
-      event.stopPropagation();
-      close(true);
-    }
-  });
-  list.querySelector('[data-newtab-action="add"]').addEventListener('click', () => {
-    close(true);
-    document.dispatchEvent(new Event('newtab:add-bookmark'));
-  });
-  reset.addEventListener('click', () => {
-    resetPanel();
-    close(true);
-  });
-  restoreOrder.addEventListener('click', () => {
-    close(true);
-    document.dispatchEvent(new Event('newtab:restore-common-order'));
-  });
-  document.addEventListener('bookmark-order-mode', event => {
-    restoreOrder.hidden = event.detail.mode !== 'manual';
-  });
-
-  const origins = ['<all_urls>'];
-  const sync = async() => {
-    const { visitPreviewEnabled } = await storage.local.get('visitPreviewEnabled');
-    optIn.checked = Boolean(visitPreviewEnabled && await containsPermissions({ origins }));
-  };
-  sync().catch(() => { optIn.checked = false; });
-  browser.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.visitPreviewEnabled) sync().catch(() => { optIn.checked = false; });
-  });
-  browser.permissions.onRemoved?.addListener(() => sync().catch(() => { optIn.checked = false; }));
-  optIn.addEventListener('change', async() => {
-    optIn.disabled = true;
-    try {
-      const enabled = optIn.checked && await requestPermissions({ origins });
-      await storage.local.set({ visitPreviewEnabled: enabled });
-      optIn.checked = enabled;
-    } catch {
-      await sync().catch(() => { optIn.checked = false; });
-      Toast.show(isChinese() ? '无法更改预览设置，请重试。' : 'Could not change the preview setting. Try again.');
-    } finally {
-      optIn.disabled = false;
-    }
-  });
+  if (edge.includes('e')) width = clamp(width + dx, minWidth, Math.min(maxWidth, view.width - x - MARGIN));
+  if (edge.includes('n')) {
+    height = clamp(height - dy, minHeight, Math.min(maxHeight, y + height - MARGIN));
+    y += rect.height - height;
+  }
+  if (edge.includes('s')) height = clamp(height + dy, minHeight, Math.min(maxHeight, view.height - y - MARGIN));
+  return fit({ x, y, width, height }, rect.dock, view);
 }
 
 export default function setupFolderPanelLayout(panel) {
   const toggle = document.getElementById('folderDockToggle');
   const narrow = window.matchMedia('(max-width: 700px), (max-height: 395px)');
-  let requested = readPosition();
+  let saved = readPosition();
   let position;
-  let pointerActive = false;
+  let cancelDrag;
 
-  const apply = () => {
-    const viewport = document.documentElement;
-    const defaults = {
-      x: MARGIN,
-      y: MARGIN,
-      width: DEFAULT_WIDTH,
-      height: Math.min(580, viewport.clientHeight - MARGIN * 2)
-    };
-    const desired = requested ?? defaults;
-    const alignedLeft = !requested || (desired.x <= MARGIN + 8 && desired.y <= MARGIN + 8);
-    const width = Math.min(Math.max(MIN_WIDTH, desired.width), MAX_WIDTH, Math.max(1, viewport.clientWidth - (alignedLeft && !narrow.matches ? 355 : MARGIN * 2)));
-    const top = alignedLeft ? MARGIN : TOOLBAR_CLEARANCE;
-    const height = Math.min(Math.max(MIN_HEIGHT, desired.height), Math.max(1, viewport.clientHeight - top - MARGIN));
-    const x = alignedLeft ? MARGIN : Math.min(Math.max(MARGIN, desired.x), viewport.clientWidth - width - MARGIN);
-    const y = alignedLeft ? MARGIN : Math.min(Math.max(top, desired.y), viewport.clientHeight - height - MARGIN);
-    position = { x, y, width, height };
-
-    for (const [key, value] of Object.entries(position)) {
-      panel.style.setProperty(`--panel-${key}`, `${value}px`);
+  function render(rect, view) {
+    position = rect;
+    const { x, y, width, height, dock } = rect;
+    panel.dataset.dock = document.body.dataset.folderDock = dock;
+    for (const key of GEOMETRY) panel.style.setProperty(`--panel-${key}`, `${rect[key]}px`);
+    const distance = { left: x + width, right: view.width - x, top: y + height, bottom: view.height - y };
+    for (const side of SIDES) {
+      document.body.style.setProperty(`--folder-dock-${side}`, side === dock ? `${distance[side] + MARGIN}px` : '0px');
     }
-    document.body.style.setProperty('--folder-dock-reserved', alignedLeft ? `${width + MARGIN * 2}px` : '0px');
-  };
+  }
 
-  const reset = () => {
-    requested = null;
+  function restore() {
+    if (narrow.matches) {
+      panel.dataset.dock = document.body.dataset.folderDock = 'left';
+      for (const key of GEOMETRY) panel.style.removeProperty(`--panel-${key}`);
+      for (const side of SIDES) document.body.style.removeProperty(`--folder-dock-${side}`);
+      return;
+    }
+    const view = viewport();
+    const desired = saved ?? { x: MARGIN, y: MARGIN, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT };
+    const rect = { ...desired };
+    // Old installations have absolute coordinates only. Newly saved right/bottom docks remember their edge distance.
+    if (Number.isFinite(desired.right)) {
+      if (isHorizontal(desired.dock)) {
+        rect.width = view.width - desired.x - desired.right;
+      } else {
+        const limits = sizeLimits(false, view);
+        rect.width = clamp(rect.width, limits.minWidth, limits.maxWidth);
+        const freeWidth = view.width - rect.width;
+        rect.x = desired.dock === 'right' ? Math.max(freeWidth / 2, freeWidth - desired.right) :
+          Math.min(freeWidth / 2, rect.x);
+      }
+    }
+    if (isHorizontal(desired.dock) && Number.isFinite(desired.bottom)) {
+      const limits = sizeLimits(true, view);
+      rect.height = clamp(rect.height, limits.minHeight, limits.maxHeight);
+      const freeHeight = view.height - rect.height;
+      rect.y = desired.dock === 'bottom' ? Math.max(freeHeight / 2, freeHeight - desired.bottom) :
+        Math.min(freeHeight / 2, rect.y);
+    }
+    render(fit(rect, desired.dock, view), view);
+    if (saved && !SIDES.includes(saved.dock)) persist();
+  }
+
+  function persist() {
+    const view = viewport();
+    const { x, y, width, height, dock } = position;
+    const right = view.width - x - width;
+    const bottom = view.height - y - height;
+    const vertical = isHorizontal(dock) ? saved?.vertical : { width, height };
+    const rail = isHorizontal(dock) ? { x, right, height } : saved?.rail;
+    saved = { ...position, right, bottom, vertical, rail };
+    try {
+      localStorage.setItem(POSITION_KEY, JSON.stringify(saved));
+    } catch {
+      // The current tab can still use its layout if storage is unavailable.
+    }
+  }
+
+  function dockTo(side, view, origin) {
+    if (isHorizontal(side)) {
+      const rail = saved?.rail;
+      const x = Number.isFinite(rail?.x) ? rail.x : MARGIN;
+      const right = Number.isFinite(rail?.right) ? rail.right : MARGIN;
+      const height = clamp(rail?.height || 220, 148, sizeLimits(true, view).maxHeight);
+      const y = side === 'top' ? MARGIN : view.height - MARGIN - height;
+      return fit({ x, y, width: view.width - x - right, height }, side, view);
+    }
+    const size = isHorizontal(origin.dock) ? saved?.vertical : origin;
+    const limits = sizeLimits(false, view);
+    const width = clamp(size?.width || DEFAULT_WIDTH, limits.minWidth, limits.maxWidth);
+    const height = size?.height || DEFAULT_HEIGHT;
+    const x = side === 'left' ? MARGIN : view.width - width - MARGIN;
+    return fit({ x, y: origin.y, width, height }, side, view);
+  }
+
+  function moveRect(origin, start, point, commit, view) {
+    const dx = point.x - start.x;
+    const dy = point.y - start.y;
+    const central = point.x > view.width * 0.23 && point.x < view.width * 0.77;
+    let snap;
+    if (central && point.y <= SNAP_DISTANCE) snap = 'top';
+    if (central && point.y >= view.height - SNAP_DISTANCE) snap = 'bottom';
+    if (snap) {
+      panel.dataset.snap = snap;
+      if (commit) return dockTo(snap, view, origin);
+    } else {
+      delete panel.dataset.snap;
+    }
+
+    const horizontal = isHorizontal(origin.dock);
+    if (horizontal && central && Math.abs(dy) < SNAP_DISTANCE) {
+      return fit({ ...origin, x: origin.x + dx, y: origin.y + dy }, origin.dock, view);
+    }
+    const size = horizontal ? saved?.vertical : origin;
+    const width = size?.width || DEFAULT_WIDTH;
+    const height = size?.height || DEFAULT_HEIGHT;
+    // The handle is centered horizontally in both layouts and sits at the same offset below the top.
+    const x = point.x - (start.x - origin.x - origin.width / 2) - width / 2;
+    const y = origin.y + dy;
+    return fit({ x, y, width, height }, 'left', view);
+  }
+
+  function dragHandle(handle, edge) {
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || cancelDrag || narrow.matches) return;
+      event.preventDefault();
+      const origin = position;
+      const start = { x: event.clientX, y: event.clientY };
+      const controller = new AbortController();
+      const finish = () => {
+        controller.abort();
+        cancelDrag = undefined;
+        delete panel.dataset.snap;
+        panel.classList.remove('is-moving');
+        if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+      };
+      cancelDrag = () => {
+        finish();
+        restore();
+      };
+      handle.setPointerCapture(event.pointerId);
+      panel.classList.add('is-moving');
+      let moved = false;
+      const update = current => {
+        const view = viewport();
+        const point = { x: current.clientX, y: current.clientY };
+        const dx = point.x - start.x;
+        const dy = point.y - start.y;
+        if (!moved && Math.hypot(dx, dy) < 4) return;
+        moved = true;
+        const rect = edge ? resizeRect(origin, edge, dx, dy, view) :
+          moveRect(origin, start, point, current.type === 'pointerup', view);
+        render(rect, view);
+      };
+      const track = current => {
+        if (current.pointerId !== event.pointerId) return;
+        if (current.type === 'pointermove') {
+          update(current);
+        } else if (current.type === 'pointerup') {
+          update(current);
+          finish();
+          if (moved) persist();
+        } else {
+          cancelDrag();
+        }
+      };
+      for (const type of ['pointermove', 'pointerup', 'pointercancel', 'lostpointercapture']) {
+        handle.addEventListener(type, track, { signal: controller.signal });
+      }
+    });
+
+    handle.addEventListener('keydown', event => {
+      const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      const direction = directions[event.key];
+      if (!direction || narrow.matches || cancelDrag) return;
+      event.preventDefault();
+      const view = viewport();
+      const step = event.shiftKey ? 32 : 12;
+      const [dx, dy] = direction.map(value => value * step);
+      if (!edge && event.altKey) {
+        const sides = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'top', ArrowDown: 'bottom' };
+        render(dockTo(sides[event.key], view, position), view);
+      } else if (edge) {
+        render(resizeRect(position, edge, dx, dy, view), view);
+      } else {
+        render(fit({ ...position, x: position.x + dx, y: position.y + dy }, position.dock, view), view);
+      }
+      persist();
+    });
+  }
+
+  const move = document.getElementById('folderDockHandle');
+  const resize = document.getElementById('folderDockResize');
+  if (isChinese()) {
+    move.setAttribute('aria-label', '移动文件夹面板');
+    resize.setAttribute('aria-label', '调整文件夹面板大小');
+    resize.title = '拖动或使用方向键调整大小';
+  }
+  move.title = isChinese() ? '拖动或使用方向键移动，Alt + 方向键停靠' : 'Drag or use arrow keys; Alt + arrow to dock';
+  dragHandle(move);
+  for (const grip of panel.querySelectorAll('.folder-dock__resize')) {
+    dragHandle(grip, grip.dataset.resizeEdge || 'se');
+  }
+
+  function reset() {
+    cancelDrag?.();
+    saved = null;
     localStorage.removeItem(POSITION_KEY);
-    apply();
-  };
-  const persist = () => localStorage.setItem(POSITION_KEY, JSON.stringify(position));
+    restore();
+  }
   const closePanel = (focus = false) => {
     if (!narrow.matches || !panel.classList.contains('is-open')) return;
     panel.classList.remove('is-open');
     toggle.setAttribute('aria-expanded', 'false');
     if (focus) toggle.focus();
   };
-  const adjust = (resize, origin, dx, dy) => {
-    if (resize) {
-      requested = { ...origin, width: origin.width + dx, height: origin.height + dy };
-    } else {
-      requested = { ...origin, x: origin.x + dx, y: origin.y + dy };
-    }
-    apply();
-  };
-
-  function dragHandle(handle, resize) {
-    handle.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || pointerActive || narrow.matches) return;
-      event.preventDefault();
-      pointerActive = true;
-      const origin = position;
-      const previous = requested;
-      const controller = new AbortController();
-      handle.setPointerCapture(event.pointerId);
-      panel.classList.add('is-moving');
-      let moved = false;
-      const stop = current => {
-        if (current.pointerId !== event.pointerId) return;
-        controller.abort();
-        pointerActive = false;
-        panel.classList.remove('is-moving');
-        if (handle.hasPointerCapture(current.pointerId)) handle.releasePointerCapture(current.pointerId);
-        if (current.type !== 'pointerup') {
-          requested = previous;
-          apply();
-        } else if (moved) {
-          requested = position;
-          persist();
-        }
-      };
-      handle.addEventListener('pointermove', current => {
-        if (current.pointerId !== event.pointerId) return;
-        const dx = current.clientX - event.clientX;
-        const dy = current.clientY - event.clientY;
-        if (!moved && Math.hypot(dx, dy) < 4) return;
-        moved = true;
-        adjust(resize, origin, dx, dy);
-      }, { signal: controller.signal });
-      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
-        handle.addEventListener(type, stop, { signal: controller.signal });
-      }
-    });
-    handle.addEventListener('keydown', event => {
-      const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-      const direction = directions[event.key];
-      if (!direction || narrow.matches) return;
-      event.preventDefault();
-      const step = event.shiftKey ? 32 : 12;
-      adjust(resize, position, direction[0] * step, direction[1] * step);
-      requested = position;
-      persist();
-    });
-  }
-
-  if (isChinese()) {
-    const move = document.getElementById('folderDockHandle');
-    const resize = document.getElementById('folderDockResize');
-    move.setAttribute('aria-label', '移动文件夹面板');
-    move.title = '拖动或使用方向键移动';
-    resize.setAttribute('aria-label', '调整文件夹面板大小');
-    resize.title = '拖动或使用方向键调整大小';
-  }
   toggle.setAttribute('aria-label', isChinese() ? '文件夹' : 'Folders');
   const updateMode = () => {
+    cancelDrag?.();
     toggle.hidden = !narrow.matches;
     panel.classList.remove('is-open');
     toggle.setAttribute('aria-expanded', 'false');
-    apply();
+    restore();
   };
   updateMode();
   narrow.addEventListener('change', updateMode);
-  window.addEventListener('resize', apply);
+  window.addEventListener('resize', () => {
+    if (cancelDrag) cancelDrag();
+    else restore();
+  });
   toggle.addEventListener('click', () => {
     if (panel.classList.contains('is-open')) {
       closePanel(true);
@@ -228,9 +299,6 @@ export default function setupFolderPanelLayout(panel) {
     panel.classList.add('is-open');
     toggle.setAttribute('aria-expanded', 'true');
     panel.querySelector('.is-active .folder-card__open, .folder-card__open')?.focus();
-  });
-  document.addEventListener('pointerdown', event => {
-    if (!panel.contains(event.target) && !toggle.contains(event.target)) closePanel(panel.contains(document.activeElement));
   });
   window.addEventListener('hashchange', () => closePanel(panel.contains(document.activeElement)));
   panel.addEventListener('keydown', event => {
@@ -248,8 +316,6 @@ export default function setupFolderPanelLayout(panel) {
     event.preventDefault();
     next.focus();
   });
-  dragHandle(document.getElementById('folderDockHandle'), false);
-  dragHandle(document.getElementById('folderDockResize'), true);
-  setupActions(reset);
+  document.addEventListener('newtab:reset-panel', reset);
   return () => closePanel(panel.contains(document.activeElement));
 }

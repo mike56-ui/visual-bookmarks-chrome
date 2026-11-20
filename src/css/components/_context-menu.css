@@ -3,6 +3,9 @@
   display: none;
   position: absolute;
   z-index: 99999;
+  max-width: calc(100vw - 20px);
+  max-height: calc(100vh - 20px);
+  overflow: auto;
   background-color: var(--context-menu-bg);
   border-radius: var(--base-radius);
   border: 1px solid rgb(0 0 0 / 10%);
@@ -28,18 +31,24 @@
 .context-menu__link {
   display: flex;
   align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
   font-size: 0.9em;
   padding: 5px 15px;
   color: var(--context-menu-color);
   text-decoration: none;
-  white-space: nowrap;
+  text-align: left;
   border-radius: var(--base-radius);
-  &:not([href]) {
-    cursor: pointer;
-  }
+  cursor: pointer;
   &:not(.is-disabled):hover,
-  &.hover {
+  &:focus-visible {
     background-color: var(--context-menu-bg-hover);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--focus-color);
+    outline-offset: -2px;
   }
   &.is-disabled {
     opacity: 0.35;
@@ -49,6 +58,7 @@
 
 .context-menu__icon {
   display: inline-flex;
+  flex: none;
   width: 18px;
   height: 18px;
   margin-right: 10px;

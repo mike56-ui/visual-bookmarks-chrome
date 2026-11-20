@@ -17,20 +17,11 @@ function restSlot(node) {
   return { x: node.offsetLeft, y: node.offsetTop, w: node.offsetWidth, h: node.offsetHeight };
 }
 
-function slide(node, fromX, fromY, toX, toY, width) {
-  const wraps = Math.abs(fromX - toX) > width * 1.35 && Math.abs(fromY - toY) > 20;
-  if (!wraps) {
-    return node.animate([{ transform: translate(fromX, fromY) }, { transform: translate(toX, toY) }],
-      { duration: 175, easing: EASE });
-  }
-  // At a row boundary, let the card leave one edge and enter the next row.
-  const edge = fromX > toX ? 12 : -12;
+function slide(node, fromX, fromY, toX, toY) {
   return node.animate([
-    { transform: translate(fromX, fromY), opacity: 1 },
-    { offset: .46, transform: translate(fromX + edge, fromY), opacity: 0 },
-    { offset: .47, transform: translate(toX - edge, toY), opacity: 0 },
-    { transform: translate(toX, toY), opacity: 1 }
-  ], { duration: 170, easing: EASE });
+    { transform: translate(fromX, fromY) },
+    { transform: translate(toX, toY) }
+  ], { duration: 175, easing: EASE });
 }
 
 function nearestSlot(nodes, slots, origin, x, y, accepts) {
@@ -75,7 +66,8 @@ function makeLift(source, count) {
   lift.className = 'motion-drag-lift';
   lift.inert = true;
   lift.setAttribute('aria-hidden', 'true');
-  surface.className = source.matches('.folder-card') ? 'folder-card motion-drag-surface' : 'bookmark motion-drag-surface';
+  surface.className = source.matches('.folder-card')
+    ? 'folder-card motion-drag-surface' : 'bookmark motion-drag-surface';
   surface.append(...[...source.children].filter(node =>
     !node.matches('button, input, .bookmark__overlay')).map(node => node.cloneNode(true)));
   for (const node of surface.querySelectorAll('[id], button, input, .dropzone-bookmark')) {
@@ -111,10 +103,13 @@ export default function bindMotionDrag({
   let suppressClick = false;
   let scrollFrame = 0;
   let flight = null;
+  let settlingLayout = null;
   const finalSlides = new Map();
 
   const bookmarkCards = () => [...grid.querySelectorAll(BOOKMARK)].filter(node => node.offsetWidth);
   const folderCards = () => [...folderList.querySelectorAll(FOLDER)].filter(node => node.offsetWidth);
+  const horizontalFolders = () =>
+    getComputedStyle(folderList).getPropertyValue('--folder-list-axis').trim() === 'horizontal';
   const listNodes = g => g.folder ? folderCards() : bookmarkCards();
   const allCards = () => [...folderCards(), ...bookmarkCards()];
   const keyOf = node => node.matches('.folder-card') ? 'f' + folderId(node) : 'b' + bookmarkId(node);
@@ -144,8 +139,8 @@ export default function bindMotionDrag({
     capture.classList.add('motion-drag-active');
     grid.classList.add('has-dragging');
     const nodes = listNodes(g);
-    g.moving = new Set(g.folder ? subtreeOf(g.node, nodes)
-      : nodes.filter(node => node === g.node || g.node.hasAttribute('data-selected') && node.hasAttribute('data-selected')));
+    const selected = node => g.node.hasAttribute('data-selected') && node.hasAttribute('data-selected');
+    g.moving = new Set(g.folder ? subtreeOf(g.node, nodes) : nodes.filter(node => node === g.node || selected(node)));
     if (!updateLayout(g)) {
       grid.classList.remove('has-dragging');
       capture.classList.remove('motion-drag-active');
@@ -154,6 +149,7 @@ export default function bindMotionDrag({
     const rect = g.node.getBoundingClientRect();
     g.offsetX = g.startX - rect.left;
     g.offsetY = g.startY - rect.top;
+    g.horizontalFolders = horizontalFolders();
     g.lift = makeLift(g.node, g.folder ? 1 : g.moving.size);
     g.lift.style.width = rect.width + 'px';
     g.lift.style.height = rect.height + 'px';
@@ -199,7 +195,7 @@ export default function bindMotionDrag({
       node.classList.add('motion-drag-shifted');
       node.style.setProperty('--motion-drag-shift', translate(x, y));
       if (!reduced.matches && Math.abs(fromX - x) + Math.abs(fromY - y) > 1) {
-        g.slides.set(node, slide(node, fromX, fromY, x, y, from.w));
+        g.slides.set(node, slide(node, fromX, fromY, x, y));
       }
     }
   }
@@ -231,13 +227,14 @@ export default function bindMotionDrag({
       const target = nearestSlot(g.nodes, g.slots, origin, x, y, node => {
         if (!g.folder) return true;
         const slot = g.slots.get(node);
-        const localY = y - origin.y;
+        const offset = g.horizontalFolders ? x - origin.x - slot.x : y - origin.y - slot.y;
         return node.dataset.folderParent === g.node.dataset.folderParent && !node.hasAttribute('data-no-folder-reorder')
-          && localY >= slot.y - 8 && localY <= slot.y + slot.h + 8;
+          && offset >= -8 && offset <= (g.horizontalFolders ? slot.w : slot.h) + 8;
       });
       if (target && !g.moving.has(target)) {
         const slot = g.slots.get(target);
-        const ratio = g.folder ? (y - origin.y - slot.y) / slot.h : (x - origin.x - slot.x) / slot.w;
+        const ratio = g.folder && !g.horizontalFolders
+          ? (y - origin.y - slot.y) / slot.h : (x - origin.x - slot.x) / slot.w;
         const after = g.lastTarget === target && Math.abs(.5 - ratio) < .08 ? g.after : ratio >= .5;
         g.lastTarget = target;
         g.after = after;
@@ -253,7 +250,7 @@ export default function bindMotionDrag({
     scrollFrame = 0;
     const g = gesture;
     if (!g?.active) return;
-    if (!g.node.isConnected || grid.hasAttribute('aria-busy') && !g.folder) {
+    if (!canDrag() || !g.node.isConnected || grid.hasAttribute('aria-busy') && !g.folder) {
       cancel();
       return;
     }
@@ -261,18 +258,31 @@ export default function bindMotionDrag({
     const main = app.getBoundingClientRect();
     const target = inside(side, g.x, g.y) ? folderList
       : !g.folder && inside(main, g.x, g.y) ? app : null;
-    if (target) {
-      const frame = target === folderList ? side : main;
-      const speed = scrollSpeed(g.y, Math.max(0, frame.top), Math.min(window.innerHeight, frame.bottom));
-      const previous = target.scrollTop;
-      if (speed) target.scrollTop += speed;
-      if (target.scrollTop !== previous) mouseTrack(g, g.x, g.y);
-    }
-    if (target) {
-      const frame = target === folderList ? side : main;
-      if (scrollSpeed(g.y, frame.top, frame.bottom)) scrollFrame = requestAnimationFrame(scrollWhileDragging);
+    if (!target) return;
+    const horizontal = target === folderList && g.horizontalFolders;
+    const frame = target === folderList ? side : main;
+    const speed = horizontal
+      ? scrollSpeed(g.x, Math.max(0, frame.left), Math.min(window.innerWidth, frame.right))
+      : scrollSpeed(g.y, Math.max(0, frame.top), Math.min(window.innerHeight, frame.bottom));
+    if (!speed) return;
+    const axis = horizontal ? 'scrollLeft' : 'scrollTop';
+    const previous = target[axis];
+    target[axis] += speed;
+    if (target[axis] !== previous) {
+      mouseTrack(g, g.x, g.y);
+      scrollFrame = requestAnimationFrame(scrollWhileDragging);
     }
   }
+
+  // A conventional mouse wheel should also reach folders beyond a horizontal strip.
+  folderList.addEventListener('wheel', event => {
+    if (event.ctrlKey || event.shiftKey || event.deltaX || !event.deltaY || !horizontalFolders()) return;
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? folderList.clientWidth : 1;
+    const before = folderList.scrollLeft;
+    folderList.scrollLeft += event.deltaY * unit;
+    if (event.cancelable && folderList.scrollLeft !== before) event.preventDefault();
+  }, { passive: false });
 
   function release(g) {
     if (capture.hasPointerCapture(g.pointerId)) capture.releasePointerCapture(g.pointerId);
@@ -280,34 +290,58 @@ export default function bindMotionDrag({
     scrollFrame = 0;
   }
 
-  function clean(g) {
-    setReceive(g, null);
+  function clearShifts(g) {
     for (const anim of g.slides.values()) anim.cancel();
+    g.slides.clear();
     for (const node of g.nodes) {
-      node.classList.remove('motion-drag-held', 'motion-drag-shifted');
+      node.classList.remove('motion-drag-shifted');
       node.style.removeProperty('--motion-drag-shift');
     }
+  }
+
+  function clean(g) {
+    setReceive(g, null);
+    clearShifts(g);
+    for (const node of g.nodes) node.classList.remove('motion-drag-held');
     for (const marker of g.markers) marker.remove();
     grid.classList.remove('has-dragging');
     capture.classList.remove('motion-drag-active');
   }
 
-  function settleOthers(previous, sourceKey) {
+  function settleOthers(previous, sourceKey, includeList = () => true) {
     if (reduced.matches) return;
     for (const node of allCards()) {
       const key = keyOf(node), old = previous.get(key);
-      if (!old || key === sourceKey) continue;
+      if (!old || key === sourceKey || !includeList(node.parentElement)) continue;
       const next = node.getBoundingClientRect();
       const x = old.left - next.left, y = old.top - next.top;
       if (Math.abs(x) + Math.abs(y) > 1) {
-        const animation = slide(node, x, y, 0, 0, next.width);
+        const animation = slide(node, x, y, 0, 0);
         finalSlides.set(node, animation);
-        animation.finished.catch(() => {}).then(() => {
+        animation.finished.catch(() => undefined).then(() => {
           if (finalSlides.get(node) === animation) finalSlides.delete(node);
         });
       }
     }
   }
+
+  document.addEventListener('bookmark-list-before-reconcile', event => {
+    const list = event.target;
+    if (list !== grid && list !== folderList) return;
+    if (flight?.list === list) removeFlight();
+    for (const [node, animation] of finalSlides) {
+      if (node.parentElement !== list) continue;
+      animation.cancel();
+      finalSlides.delete(node);
+    }
+    if (settlingLayout?.g.list === list) clearShifts(settlingLayout.g);
+  });
+  document.addEventListener('bookmark-list-after-reconcile', event => {
+    const layout = settlingLayout;
+    if (!layout || ![grid, folderList].includes(event.target)) return;
+    layout.reconciled.add(event.target);
+    settleOthers(layout.previous, layout.sourceKey, list => list === event.target);
+  });
 
   async function finish(g, commit) {
     const drop = commit && g.drop;
@@ -316,6 +350,8 @@ export default function bindMotionDrag({
     const start = g.lift.getBoundingClientRect();
     gesture = null;
     settling = true;
+    const layout = { g, previous, sourceKey, reconciled: new Set() };
+    settlingLayout = layout;
     release(g);
     let accepted = false;
     try {
@@ -330,6 +366,7 @@ export default function bindMotionDrag({
       console.warn(error);
     } finally {
       clean(g);
+      settlingLayout = null;
       settling = false;
     }
     const cross = accepted && drop?.destination;
@@ -343,7 +380,7 @@ export default function bindMotionDrag({
       receiver = allCards().find(node => keyOf(node) === sourceKey);
     }
     const end = receiver?.getBoundingClientRect();
-    settleOthers(previous, sourceKey);
+    settleOthers(previous, sourceKey, list => !layout.reconciled.has(list));
     if (reduced.matches || !end?.width || !end.height) {
       g.lift.remove();
       return;
@@ -351,14 +388,14 @@ export default function bindMotionDrag({
     const scale = cross ? Math.min(end.width / start.width, end.height / start.height, .32) : 1;
     const left = end.left + (end.width - start.width * scale) / 2;
     const top = end.top + (end.height - start.height * scale) / 2;
-    const session = { lift: g.lift, receiver: cross ? null : receiver };
+    const session = { lift: g.lift, receiver: cross ? null : receiver, list: g.list };
     session.receiver?.classList.add('motion-drag-arriving');
     session.animation = g.lift.animate([
       { transform: translate(start.left, start.top), opacity: 1 },
       { transform: translate(left, top) + ` scale(${scale})`, opacity: cross ? .12 : 1 }
     ], { duration: cross ? 185 : 150, easing: EASE, fill: 'forwards' });
     flight = session;
-    session.animation.finished.catch(() => {}).then(() => {
+    session.animation.finished.catch(() => undefined).then(() => {
       if (flight === session) removeFlight();
     });
   }
@@ -385,8 +422,9 @@ export default function bindMotionDrag({
     if (event.button !== 0) return;
     suppressClick = false;
     if (!event.isPrimary || event.pointerType !== 'mouse' || gesture || settling || !canDrag()) return;
-    if (event.altKey ||
-      event.target.closest('input, textarea, .bookmark__delete, .folder-card__delete, .folder-card__rename-button')) return;
+    const control = event.target.closest(
+      'input, textarea, .bookmark__refresh, .bookmark__delete, .folder-card__delete, .folder-card__rename-button');
+    if (event.altKey || control) return;
     const leftNode = event.target.closest('.folder-card[data-folder-id]');
     const rightNode = event.target.closest('.bookmark[data-id]');
     const folder = folderList.contains(leftNode);
@@ -402,7 +440,7 @@ export default function bindMotionDrag({
   document.addEventListener('pointermove', event => {
     const g = gesture;
     if (!g || g.pointerId !== event.pointerId) return;
-    if (!(event.buttons & 1) || !g.node.isConnected) {
+    if (!canDrag() || !(event.buttons & 1) || !g.node.isConnected) {
       cancel();
       return;
     }

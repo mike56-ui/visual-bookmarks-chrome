@@ -5,7 +5,9 @@ export async function readUsage() {
   return result[USAGE_KEY] || {};
 }
 
-export function recordOpen(id) {
+export function recordOpen(id, sameTabBookmarkUrl) {
   if (!id || browser.extension?.inIncognitoContext) return;
-  browser.runtime.sendMessage({ bookmarkOpened: id }).catch(() => {});
+  const message = { bookmarkOpened: id };
+  if (sameTabBookmarkUrl) message.sameTabBookmarkUrl = sameTabBookmarkUrl;
+  browser.runtime.sendMessage(message).catch(() => {});
 }

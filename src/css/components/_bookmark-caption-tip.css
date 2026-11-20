@@ -1,0 +1,47 @@
+.bookmark-caption-tip {
+  position: fixed;
+  z-index: 3000;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(390px, var(--caption-available-width, calc(100vw - 20px)));
+  max-height: min(260px, calc(100vh - 20px));
+  padding: 13px 16px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 13px;
+  background: var(--control-surface);
+  box-shadow: 0 8px 30px rgb(30 45 65 / 12%), 0 2px 7px rgb(30 45 65 / 6%);
+  color: var(--text-main);
+  text-align: start;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: text;
+  transform: translateY(-3px);
+  transition: opacity 150ms ease, transform 150ms ease, visibility 0s linear 150ms;
+}
+
+.bookmark-caption-tip.is-above { transform: translateY(3px); }
+.bookmark-caption-tip.is-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: none;
+  transition-delay: 0s;
+}
+
+.bookmark-caption-tip__title { font: 600 17px/1.45 var(--font-family); }
+.bookmark-caption-tip__url {
+  font: 400 14px/1.5 var(--font-family);
+  color: var(--text-secondary);
+  unicode-bidi: isolate;
+  user-select: all;
+}
+.bookmark-caption-tip__title:not([hidden]) + .bookmark-caption-tip__url { margin-top: 5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bookmark-caption-tip,
+  .bookmark-caption-tip.is-above { transition: none; transform: none; }
+}

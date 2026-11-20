@@ -1,4 +1,28 @@
 {
+  "bing_results_heading": {
+    "message": "Bing 網頁結果"
+  },
+  "bing_more_results": {
+    "message": "更多 Bing 結果"
+  },
+  "bing_enable": {
+    "message": "啟用 Bing 搜尋"
+  },
+  "bing_permission_hint": {
+    "message": "啟用後，搜尋框中的關鍵字會傳送給 Bing。"
+  },
+  "bing_loading": {
+    "message": "正在搜尋 Bing…"
+  },
+  "bing_no_results": {
+    "message": "Bing 找不到相關網頁。"
+  },
+  "bing_unavailable": {
+    "message": "暫時無法取得 Bing 結果。"
+  },
+  "bing_bookmarks_placeholder": {
+    "message": "搜尋書籤和 Bing 網頁"
+  },
   "load_more_bookmarks": {
     "message": "顯示更多書籤"
   },
@@ -89,7 +113,10 @@
     "message": "編輯"
   },
   "contextmenu_capture": {
-    "message": "更新縮圖"
+    "message": "更新此書籤縮圖"
+  },
+  "bookmark_actions": {
+    "message": "書籤操作"
   },
   "contextmenu_upload": {
     "message": "從電腦上傳"
@@ -104,7 +131,7 @@
     "message": "刪除圖片？"
   },
   "confirm_delete_images": {
-    "message": "你確定嗎？所有本機的圖片將被刪除"
+    "message": "確定清空縮圖和本機背景嗎？書籤會保留。"
   },
   "confirm_delete_bookmark": {
     "message": "你確定要刪除這個書籤嗎？"
@@ -126,6 +153,21 @@
   },
   "notice_thumb_image_updated": {
     "message": "書籤縮圖已更新"
+  },
+  "notice_thumb_unchanged": {
+    "message": "縮圖沒有變化。"
+  },
+  "notice_thumb_custom_kept": {
+    "message": "已保留自訂封面。"
+  },
+  "notice_thumb_busy": {
+    "message": "正在更新縮圖，請稍候。"
+  },
+  "notice_thumb_site_unavailable": {
+    "message": "網站傳回錯誤頁面。可在網頁恢復後重新整理縮圖。"
+  },
+  "notice_thumb_capture_failed": {
+    "message": "無法更新縮圖，請再試一次。"
   },
   "notice_bookmark_exist": {
     "message": "書籤已經存在"
@@ -198,6 +240,18 @@
   "not_found_link_text": {
     "message": "書籤列"
   },
+  "action_refresh_folder_previews": {
+    "message": "更新目前資料夾縮圖"
+  },
+  "action_reset_folder_panel": {
+    "message": "重設資料夾面板"
+  },
+  "action_undo_order": {
+    "message": "復原上次排序"
+  },
+  "action_restore_common_order": {
+    "message": "恢復常用排序"
+  },
   "add_bookmark": {
     "message": "加到書籤"
   },
@@ -208,28 +262,55 @@
     "message": "編輯書籤"
   },
   "options": {
-    "message": "選項"
+    "message": "設定"
+  },
+  "settings_fill_missing_previews": {
+    "message": "自動補上缺少的縮圖"
+  },
+  "settings_fill_missing_previews_note": {
+    "message": "瀏覽書籤頁時，僅為畫面中缺少縮圖的書籤產生預覽。"
   },
   "view_setting": {
-    "message": "檢視設定"
+    "message": "外觀"
   },
   "general_setting": {
-    "message": "一般設定"
+    "message": "一般"
   },
   "advanced_setting": {
-    "message": "進階設定"
+    "message": "進階"
   },
   "dial_width": {
-    "message": "寬度比例"
+    "message": "書籤區寬度"
   },
   "number_of_columns": {
-    "message": "畫面寬度(左到右的數量)"
+    "message": "每列書籤數"
+  },
+  "settings_automatic": {
+    "message": "自動"
+  },
+  "settings_frequent_first": {
+    "message": "常用優先"
+  },
+  "settings_visit_preview": {
+    "message": "加入書籤時儲存第一張縮圖"
+  },
+  "settings_visit_permission": {
+    "message": "首次啟用需授予網站存取權限"
+  },
+  "settings_visit_error": {
+    "message": "無法變更縮圖設定，請再試一次。"
+  },
+  "settings_manual_preview_delay": {
+    "message": "可為載入較慢的網頁多留一點時間。"
+  },
+  "settings_manual_preview_nested": {
+    "message": "手動更新時包含子資料夾"
   },
   "vertical_center": {
     "message": "垂直居中"
   },
   "default_folder_id": {
-    "message": "預設的顯示資料夾"
+    "message": "預設資料夾"
   },
   "background": {
     "message": "背景"
@@ -277,7 +358,7 @@
     "message": "顯示設定圖示"
   },
   "show_toolbar": {
-    "message": "顯示搜尋列和資料夾選擇"
+    "message": "顯示搜尋列"
   },
   "show_create_column": {
     "message": "顯示用於新增書籤的列"
@@ -286,10 +367,10 @@
     "message": "顯示書籤標題"
   },
   "show_favicon": {
-    "message": "在標題旁顯示網站圖示"
+    "message": "在書籤卡片中顯示網站圖示"
   },
   "open_link_newtab": {
-    "message": "搜尋結果在新分頁開啟"
+    "message": "在新分頁開啟連結"
   },
   "show_contextmenu_item": {
     "message": "顯示在右鍵選單"
@@ -307,16 +388,16 @@
     "message": "進階設定"
   },
   "clear_background_locals": {
-    "message": "清除本機機料夾內的圖示"
+    "message": "清空縮圖與本機背景"
   },
   "reset_local_default": {
-    "message": "將本機的設定回復到預設值"
+    "message": "還原預設設定"
   },
   "reset_sync_text": {
-    "message": "刪除伺服器上以同步的資料"
+    "message": "清除雲端同步設定"
   },
   "option_not_sync": {
-    "message": "選項未同步"
+    "message": "僅儲存在本機"
   },
   "custom_style": {
     "message": "自訂 CSS"
@@ -359,7 +440,7 @@
     "message": "啟用此設定後，將顯示資料夾中 4 個隨機網站的縮圖，而不是圖示或自訂圖片。"
   },
   "backup_settings": {
-    "message": "匯入 / 匯出設定"
+    "message": "匯入及匯出設定"
   },
   "backup_settings_description": {
     "message": "只有備份 Visual bookmarks 的設定，但不包括書籤和縮圖的圖示"
@@ -418,7 +499,7 @@
     "message": "網址是無效的"
   },
   "thumbnails_update_delay": {
-    "message": "建立縮圖時，先做一些延遲"
+    "message": "手動更新縮圖的等待時間"
   },
   "thumbnails_update_delay_note": {
     "message": "當頁面更新延遲是很有用的，可以抓出網站的縮圖。 \n\n 但延遲時間越久，等待時間就會越長"
@@ -448,13 +529,13 @@
     "message": "預設的搜尋引擎"
   },
   "move_to_start": {
-    "message": "將書籤移至資料夾內清單的頂部"
+    "message": "移入時排在目標資料夾開頭"
   },
   "bookmarks_sorting_type": {
     "message": "依照類別排序"
   },
   "sort_by": {
-    "message": "排序依據"
+    "message": "預設書籤順序"
   },
   "sort_by_date": {
     "message": "日期"
@@ -481,7 +562,7 @@
     "message": "最新資訊"
   },
   "search_autofocus": {
-    "message": "自動將輸入游標放在搜尋列上"
+    "message": "自動聚焦搜尋列"
   },
   "confirm_delete_selected_bookmarks": {
     "message": "你確定要刪除選定的書籤嗎？"
@@ -544,7 +625,7 @@
     "message": "選擇一個資料夾"
   },
   "show_last_opened_folder": {
-    "message": "顯示上次開啟的資料夾"
+    "message": "記住上次開啟的資料夾"
   },
   "remove_service": {
     "message": "刪除 $service$",
@@ -570,7 +651,7 @@
     "message": "為什麼要使用這個權限？"
   },
   "host_permissions_info": {
-    "message": "<p>此權限對於產生網站螢幕截圖是必需的。但『視覺書籤』不會收集、追蹤或修改您在網站上的資料。打開網站的單獨視窗後發生的唯一變動是在產生螢幕截圖之前隱藏網站上的捲軸 (盡量讓螢幕截圖不會有捲軸). 擴充代碼可在 <a href=\"https://github.com/k-ivan/visual-bookmarks-chrome\" target=\"_blank\">Github</a>. 如果對此此權限有疑慮，可以選擇不同意授權，網站的截圖功能將無法使用，但『視覺書籤』能仍然可以正常執行。</p><p>嘗試截取網站螢幕截圖時將請求此權限 (如果已停用)。你也可以透過開啟包含有關擴充功能的詳細資訊的視窗來在瀏覽器設定中管理此權限。</p><p>通常，在 Chrome 和 Edge 等瀏覽器中，此權限預設是啟用的，而在 Firefox 中則是停用。因此，預設行為可能會因瀏覽器而有所差異。</p>"
+    "message": "<p>網站存取是選用權限。授權後，擴充功能可依設定儲存第一張縮圖、手動更新縮圖，並讀取網站提供的圖示。縮圖儲存在此瀏覽器中。您可在瀏覽器的擴充功能設定中撤銷網站存取權限。</p>"
   },
   "example_string": {
     "message": "範例： $string$",

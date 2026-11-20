@@ -1,4 +1,28 @@
 {
+  "bing_results_heading": {
+    "message": "Результаты поиска Bing"
+  },
+  "bing_more_results": {
+    "message": "Ещё в Bing"
+  },
+  "bing_enable": {
+    "message": "Включить поиск Bing"
+  },
+  "bing_permission_hint": {
+    "message": "После включения введённые здесь запросы будут отправляться в Bing."
+  },
+  "bing_loading": {
+    "message": "Поиск в Bing…"
+  },
+  "bing_no_results": {
+    "message": "В Bing ничего не найдено."
+  },
+  "bing_unavailable": {
+    "message": "Результаты Bing временно недоступны."
+  },
+  "bing_bookmarks_placeholder": {
+    "message": "Искать в закладках и Bing"
+  },
   "ext_name": {
     "message": "Визуальные закладки"
   },
@@ -207,6 +231,12 @@
   "options": {
     "message": "Опции"
   },
+  "settings_fill_missing_previews": {
+    "message": "Автоматически добавлять недостающие миниатюры"
+  },
+  "settings_fill_missing_previews_note": {
+    "message": "Создавать миниатюры только для закладок, видимых на экране."
+  },
   "view_setting": {
     "message": "Вид"
   },
@@ -283,7 +313,7 @@
     "message": "Показывать название закладки"
   },
   "show_favicon": {
-    "message": "Показывать иконки сайтов рядом с названием"
+    "message": "Показывать значки сайтов на карточках закладок"
   },
   "open_link_newtab": {
     "message": "Открывать закладки и поиск в новой вкладке"

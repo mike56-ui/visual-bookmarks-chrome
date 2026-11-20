@@ -1,4 +1,28 @@
 {
+  "bing_results_heading": {
+    "message": "Résultats web de Bing"
+  },
+  "bing_more_results": {
+    "message": "Plus sur Bing"
+  },
+  "bing_enable": {
+    "message": "Activer la recherche Bing"
+  },
+  "bing_permission_hint": {
+    "message": "Une fois la recherche activée, les mots saisis ici seront envoyés à Bing."
+  },
+  "bing_loading": {
+    "message": "Recherche sur Bing…"
+  },
+  "bing_no_results": {
+    "message": "Bing n’a trouvé aucun résultat."
+  },
+  "bing_unavailable": {
+    "message": "Les résultats de Bing sont momentanément indisponibles."
+  },
+  "bing_bookmarks_placeholder": {
+    "message": "Rechercher dans les favoris et sur Bing"
+  },
   "ext_name": {
     "message": "Favoris visuels"
   },
@@ -207,6 +231,12 @@
   "options": {
     "message": "Options"
   },
+  "settings_fill_missing_previews": {
+    "message": "Compléter automatiquement les miniatures manquantes"
+  },
+  "settings_fill_missing_previews_note": {
+    "message": "Créer les miniatures manquantes des favoris visibles à l’écran."
+  },
   "view_setting": {
     "message": "Apparence"
   },
@@ -283,7 +313,7 @@
     "message": "Afficher le titre du favori"
   },
   "show_favicon": {
-    "message": "Afficher la favicône à côté du titre"
+    "message": "Afficher les icônes des sites sur les favoris"
   },
   "open_link_newtab": {
     "message": "Ouvrir les favoris et la recherche dans un nouvel onglet"

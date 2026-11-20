@@ -110,7 +110,13 @@ export default [
           { value: 'none', title: browser.i18n.getMessage('background_effect_none') },
           { value: 'distortion', title: browser.i18n.getMessage('background_effect_distortion') }
         ]
-      }
+      },
+      ...(!FIREFOX_BROWSER ? [{
+        id: 'autoFillMissingPreviews',
+        title: browser.i18n.getMessage('settings_fill_missing_previews'),
+        note: browser.i18n.getMessage('settings_fill_missing_previews_note'),
+        type: 'switch'
+      }] : [])
     ]
   },
   {

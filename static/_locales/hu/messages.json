@@ -1,4 +1,28 @@
 {
+  "bing_results_heading": {
+    "message": "Bing webes találatok"
+  },
+  "bing_more_results": {
+    "message": "További találatok a Bingen"
+  },
+  "bing_enable": {
+    "message": "Bing-keresés engedélyezése"
+  },
+  "bing_permission_hint": {
+    "message": "Engedélyezés után az itt megadott keresőkifejezéseket elküldjük a Bingnek."
+  },
+  "bing_loading": {
+    "message": "Keresés a Bingen…"
+  },
+  "bing_no_results": {
+    "message": "Nincs webes találat erre a keresésre."
+  },
+  "bing_unavailable": {
+    "message": "A Bing találatai jelenleg nem érhetők el."
+  },
+  "bing_bookmarks_placeholder": {
+    "message": "Keresés a könyvjelzők között és a Bingen"
+  },
   "ext_name": {
     "message": "Vizuális könyvjelzők"
   },
@@ -207,6 +231,12 @@
   "options": {
     "message": "Beállítások"
   },
+  "settings_fill_missing_previews": {
+    "message": "Hiányzó bélyegképek automatikus pótlása"
+  },
+  "settings_fill_missing_previews_note": {
+    "message": "Csak a képernyőn látható könyvjelzőkhöz készül hiányzó bélyegkép."
+  },
   "view_setting": {
     "message": "Nézet"
   },
@@ -283,7 +313,7 @@
     "message": "Könyvjelző címének megjelenítése"
   },
   "show_favicon": {
-    "message": "A kedvencek ikon megjelenítése a cím mellett"
+    "message": "Webhelyikonok megjelenítése a könyvjelzőkártyákon"
   },
   "open_link_newtab": {
     "message": "Nyissa meg a könyvjelzőket, és keressen egy új lapon"

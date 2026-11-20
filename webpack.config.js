@@ -187,6 +187,7 @@ module.exports = (env, arg) => {
         });
       }),
       new webpack.EnvironmentPlugin({ BROWSER: 'chrome' }),
+      new webpack.DefinePlugin({ 'process.env.BOOKMARK_BUILD_VERSION': JSON.stringify(getManifest(BROWSER).version) }),
       BROWSER !== 'firefox' && new webpack.BannerPlugin({
         banner: 'if (typeof globalThis.browser === "undefined") { globalThis.browser = globalThis.chrome; }',
         raw: true,

@@ -21,7 +21,7 @@
 
 .grid--vcenter {
   /* content padding + header height (+ top padding) */
-  min-height: calc(100vh - 115px);
+  min-height: calc(var(--workspace-height, 100vh) - 115px);
   align-content: center;
 
   /* @nest .hidden-toolbar & {
@@ -31,12 +31,13 @@
 
 body[data-folder-dock] .container {
   width: 100%;
-  max-width: none;
-  padding-inline: clamp(24px, 4vw, 64px);
+  min-width: min(100%, 300px);
+  max-width: var(--dock-container-width, none);
+  padding-inline: clamp(12px, 4cqw, 64px);
 }
 
 body[data-folder-dock] .grid {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 148px), 1fr));
+  grid-template-columns: repeat(var(--dock-grid-columns, auto-fill), minmax(min(100%, var(--dock-grid-min-width, 148px)), 1fr));
   gap: 24px 16px;
   align-items: start;
 }
@@ -47,5 +48,5 @@ body[data-folder-dock] .grid {
 }
 
 .hidden-toolbar .grid--vcenter {
-  min-height: calc(100vh - 60px);
+  min-height: calc(var(--workspace-height, 100vh) - 60px);
 }

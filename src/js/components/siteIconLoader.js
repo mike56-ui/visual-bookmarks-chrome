@@ -84,8 +84,8 @@ export function loadSiteIcon(image, url, fallback, size) {
     const ratio = Math.max(1, window.devicePixelRatio || 1);
     const scale = Math.min(1 / ratio, size / naturalWidth, size / naturalHeight);
     if (!naturalWidth || !naturalHeight) return;
-    image.style.width = `${Math.max(1, Math.floor(naturalWidth * scale))}px`;
-    image.style.height = `${Math.max(1, Math.floor(naturalHeight * scale))}px`;
+    image.style.setProperty('--icon-width', `${Math.max(1, Math.floor(naturalWidth * scale))}px`);
+    image.style.setProperty('--icon-height', `${Math.max(1, Math.floor(naturalHeight * scale))}px`);
     image.dataset.iconSource = selectedIcon?.type ?? 'browser';
     image.classList.add('is-loaded');
     image.hidden = false;

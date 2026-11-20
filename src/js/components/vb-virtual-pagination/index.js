@@ -1,5 +1,5 @@
 import styles from './index.css';
-import { $createElement, $debounce } from '../../utils';
+import { $createElement } from '../../utils';
 
 class VbVirtualPagination extends HTMLElement {
   node = null;
@@ -29,13 +29,13 @@ class VbVirtualPagination extends HTMLElement {
     this.detachEvents();
   }
 
-  get windowHeight() {
-    return window.innerHeight;
+  get pageHeight() {
+    return Math.max(1, this.scrollableContainer.clientHeight);
   }
 
   get pages() {
     const containerHeight = this.scrollableContainer.scrollHeight;
-    return Math.ceil(containerHeight / this.windowHeight);
+    return Math.ceil(containerHeight / this.pageHeight);
   }
 
   get scrollableSelector() {
@@ -61,19 +61,22 @@ class VbVirtualPagination extends HTMLElement {
     this.handleChangeHash = this.renderDots.bind(this);
     window.addEventListener('changeFolder', this.handleChangeHash);
 
-    this.handleResize = $debounce(this.renderDots.bind(this), 300);
-    window.addEventListener('resize', this.handleResize);
+    this.resizeObserver = new ResizeObserver(() => this.renderDots());
+    this.resizeObserver.observe(this.scrollableContainer);
+    const content = this.scrollableContainer.firstElementChild;
+    if (content) this.resizeObserver.observe(content);
   }
 
-  dettachEvents() {
-    this.scrollableContainer.addEventListener('scroll', this.handleScroll);
-    this.shadowRoot.addEventListener('click', this.handleClick);
-    window.addEventListener('changeFolder', this.handleChangeHash);
-    window.addEventListener('resize', this.handleResize);
+  detachEvents() {
+    this.scrollableContainer.removeEventListener('scroll', this.handleScroll);
+    this.shadowRoot.removeEventListener('click', this.handleClick);
+    window.removeEventListener('changeFolder', this.handleChangeHash);
+    this.resizeObserver?.disconnect();
   }
 
   renderDots() {
     const pages = this.pages;
+    this.currentPage = this.pageAtScrollPosition();
     if (pages <= 1) {
       this.buttons = [];
     } else if (pages <= 20) {
@@ -106,20 +109,19 @@ class VbVirtualPagination extends HTMLElement {
 
     this.scrollableContainer.scrollTo({
       left: 0,
-      top: currentPage * this.windowHeight,
+      top: currentPage * this.pageHeight,
       behavior: 'smooth'
     });
   }
 
-  handleScroll() {
-    if (this.isHidden) {
-      return;
-    }
-    const scrollProperty = this.scrollableContainer === window ? 'scrollY' : 'scrollTop';
-    const scrollY = Math.floor(this.scrollableContainer[scrollProperty] + this.windowHeight);
-    const index = Math.floor(scrollY / Math.floor(this.scrollableContainer.scrollHeight / this.pages)) - 1;
+  pageAtScrollPosition() {
+    const { scrollTop, scrollHeight } = this.scrollableContainer;
+    if (scrollTop + this.pageHeight >= scrollHeight - 1) return Math.max(0, this.pages - 1);
+    return Math.floor(scrollTop / this.pageHeight);
+  }
 
-    this.changeActiveSlide(index);
+  handleScroll() {
+    if (!this.isHidden) this.changeActiveSlide(this.pageAtScrollPosition());
   }
 
   changeActiveSlide(page) {

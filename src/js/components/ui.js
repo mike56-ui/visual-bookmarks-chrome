@@ -1,4 +1,4 @@
-import { $createElement, $imageLoaded } from '../utils';
+import { $createElement } from '../utils';
 import { settings } from '../settings';
 import Toast from '../components/toast';
 import ImageDB from '../api/imageDB';
@@ -35,118 +35,235 @@ function createBingInfo(image) {
   );
 }
 
+let userStyle;
+let background;
+let bingRequest;
+let toldBingPermission = false;
+let dockGrid;
+let dockColumns = 7;
+let dockObserver;
+
+function releaseBackground() {
+  if (!background) return;
+  const { controller, image, video, effect, objectUrl, attribution } = background;
+  background = undefined;
+  controller.abort();
+  effect?.destroy();
+  image?.removeAttribute('src');
+  if (video) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  attribution?.remove();
+}
+
+function clearBackground(bg) {
+  releaseBackground();
+  bg?.replaceChildren();
+  bg?.style.removeProperty('opacity');
+  document.body.classList.remove('has-image');
+}
+
+function reveal(bg, session) {
+  if (background !== session || session.controller.signal.aborted) return;
+  document.body.classList.add('has-image');
+  bg.style.opacity = '1';
+}
+
+async function decodeImage(session, src, cors) {
+  const image = new Image();
+  session.image = image;
+  if (cors) image.crossOrigin = 'anonymous';
+  image.decoding = 'async';
+  image.src = src;
+  try {
+    await image.decode();
+    if (!session.controller.signal.aborted) return image;
+  } catch {
+    image.removeAttribute('src');
+  }
+}
+
+function showVideo(bg, session, src) {
+  const video = $createElement('video');
+  const { signal } = session.controller;
+  session.video = video;
+  video.muted = true;
+  video.loop = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.addEventListener('canplay', () => reveal(bg, session), { once: true, signal });
+  video.addEventListener('error', () => {
+    if (background === session) clearBackground(bg);
+  }, { once: true, signal });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) video.pause();
+    else video.play().catch(() => undefined);
+  }, { signal });
+  video.src = src;
+  bg.append(video);
+}
+
+async function showImage(bg, session, src, distortion) {
+  const isRemote = /^https?:/i.test(src);
+  let animate = distortion;
+  let image = await decodeImage(session, src, animate && isRemote);
+  if (session.controller.signal.aborted) return false;
+  // A still image remains available when the server does not allow WebGL textures.
+  if (!image && animate && isRemote) {
+    animate = false;
+    image = await decodeImage(session, src, false);
+  }
+  if (!image || session.controller.signal.aborted) return false;
+
+  if (animate) {
+    try {
+      const { default: DistortionEffect } = await import('../plugins/effects/distortion');
+      if (session.controller.signal.aborted) return false;
+      session.effect = new DistortionEffect(image);
+    } catch {
+      // Fall back to the decoded still image if WebGL is unavailable.
+    }
+  }
+  bg.append(session.effect?.canvas ?? image);
+  reveal(bg, session);
+  return true;
+}
+
+function applyDockColumns() {
+  if (!dockGrid) return;
+  const style = dockGrid.style;
+  const gap = Number.parseFloat(window.getComputedStyle(dockGrid).columnGap) || 16;
+  const fits = Math.max(1, Math.floor((dockGrid.clientWidth + gap) / (112 + gap)));
+  const columns = String(Math.min(dockColumns, fits));
+  if (style.getPropertyValue('--dock-grid-columns') !== columns) style.setProperty('--dock-grid-columns', columns);
+}
+
+function customizeDockGrid(grid, columns) {
+  dockColumns = columns;
+  if (columns === 7) {
+    dockObserver?.disconnect();
+    dockGrid = undefined;
+    grid.style.removeProperty('--dock-grid-columns');
+    grid.style.removeProperty('--dock-grid-min-width');
+    return;
+  }
+  grid.style.setProperty('--dock-grid-min-width', '112px');
+  if (dockGrid !== grid) {
+    dockObserver?.disconnect();
+    dockGrid = grid;
+    if (typeof ResizeObserver === 'function') {
+      dockObserver ||= new ResizeObserver(applyDockColumns);
+      dockObserver.observe(grid);
+    }
+  }
+  applyDockColumns();
+}
+
 export default {
   userStyles() {
-    const styles = settings.$.custom_style;
-    if (!styles) return;
-
-    const style = document.createElement('style');
-    style.appendChild(document.createTextNode(styles));
-    document.head.appendChild(style);
-  },
-  async setBG() {
-    const bgEl = document.getElementById('bg');
-    const bgState = settings.$.background_image;
-
-    if (!['background_local', 'background_external', 'background_bing'].includes(bgState)) {
+    const styles = settings.$.custom_style || '';
+    if (!styles.trim()) {
+      userStyle?.remove();
+      userStyle = undefined;
       return;
     }
-
-    let resource;
-    let hasVideo = false;
-    if (bgState === 'background_local') {
-      const image = await ImageDB.get('background');
-      if (image?.blob) {
-        resource = URL.createObjectURL(image.blob);
-        hasVideo = image.blob.type.startsWith('video');
-      }
-    } else if (bgState === 'background_external') {
-      resource = settings.$.background_external;
-    } else {
-      const bingHostPermission = await containsPermissions({ origins: ['https://www.bing.com/*'] });
-      if (!bingHostPermission) {
-        return Toast.show({
-          message: browser.i18n.getMessage('bing_permission_toast'),
-          delay: 0
-        });
-      }
-
-
-      const response = await getBingImage();
-      resource = response?.imageurl;
-      if (resource) {
-        const bingNode = createBingInfo(response);
-        document.body.append(bingNode);
-      }
+    if (!userStyle) {
+      userStyle = $createElement('style', { 'data-user-style': '' });
+      document.head.append(userStyle);
     }
+    if (userStyle.textContent !== styles) userStyle.textContent = styles;
+  },
+  async setBG() {
+    const bg = document.getElementById('bg');
+    clearBackground(bg);
+    if (!bg) return;
 
-    if (!resource) return;
+    const { background_image: mode, background_external: external, background_effect: effect } = settings.$;
+    if (mode !== 'background_bing') toldBingPermission = false;
+    if (!['background_local', 'background_external', 'background_bing'].includes(mode)) return;
 
-    if (hasVideo) {
-      const video = $createElement('video', {
-        src: resource
-      });
-      video.muted = true;
-      video.loop = true;
-      video.autoplay = true;
-
-      bgEl.append(video);
-
-      video.addEventListener('canplay', () => {
-        bgEl.style.opacity = 1;
-        document.body.classList.add('has-image');
-      }, { once: true });
-    } else {
-      const image = await $imageLoaded(resource).catch(e => {
-        console.warn(`Local background image resource problem: ${e}`);
-      });
-      if (!image) return;
-
-      if (settings.$.background_effect === 'distortion') {
-        const { default: DistortionEffect } = await import('../plugins/effects/distortion');
-        const instance = new DistortionEffect(image);
-        bgEl.append(instance.canvas);
+    const session = { controller: new AbortController() };
+    background = session;
+    const { signal } = session.controller;
+    let mounted = false;
+    try {
+      let src;
+      let video = false;
+      let card;
+      if (mode === 'background_local') {
+        const image = await ImageDB.get('background');
+        if (signal.aborted || !image?.blob) return;
+        src = session.objectUrl = URL.createObjectURL(image.blob);
+        video = image.blob.type.startsWith('video/');
+      } else if (mode === 'background_external') {
+        src = external;
       } else {
-        bgEl.append(image);
+        const granted = await containsPermissions({ origins: ['https://www.bing.com/*'] });
+        if (signal.aborted) return;
+        if (!granted) {
+          if (!toldBingPermission) Toast.show(browser.i18n.getMessage('bing_permission_toast'));
+          toldBingPermission = true;
+          return;
+        }
+        toldBingPermission = false;
+        bingRequest ||= getBingImage().finally(() => {
+          bingRequest = undefined;
+        });
+        card = await bingRequest;
+        src = card?.imageurl;
       }
+      if (!src || signal.aborted) return;
 
-      window.requestAnimationFrame(() => {
-        document.body.classList.add('has-image');
-        bgEl.style.opacity = 1;
-      });
+      if (video) {
+        showVideo(bg, session, src);
+        mounted = true;
+      } else {
+        const distortion = effect === 'distortion' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        mounted = await showImage(bg, session, src, distortion);
+      }
+      if (mounted && !signal.aborted && card) {
+        session.attribution = createBingInfo(card);
+        document.body.append(session.attribution);
+      }
+    } catch (error) {
+      if (!signal.aborted) console.warn(error);
+    } finally {
+      if (!mounted && background === session) releaseBackground();
     }
   },
   calculateStyles() {
     const doc = document.documentElement;
     const grid = document.getElementById('bookmarks');
-    const gap = parseInt(window.getComputedStyle(doc).getPropertyValue('--grid-gap'));
-    const columns = parseInt(settings.$.dial_columns);
-    const lsGridWidth = parseInt(settings.$.dial_width);
+    if (!grid) return;
+    const scrollport = document.getElementById('main');
+    doc.style.setProperty('--bookmark-scrollbar-gutter', (scrollport.offsetWidth - scrollport.clientWidth) + 'px');
 
-    const mediaQuery = window.matchMedia('(width > 480px)');
-    const containerWidth = mediaQuery.matches ? lsGridWidth : 100;
-    doc.style.setProperty('--container-width', `${containerWidth}%`);
+    const styles = window.getComputedStyle(doc);
+    const gap = Number.parseInt(styles.getPropertyValue('--grid-gap'), 10) || 0;
+    const columns = Number.parseInt(settings.$.dial_columns, 10) || 7;
+    const width = Number.parseInt(settings.$.dial_width, 10) || 70;
+    const containerWidth = window.matchMedia('(width > 480px)').matches ? width : 100;
+    doc.style.setProperty('--container-width', containerWidth + '%');
 
-    // if there is at least one button and the width of the container is greater than 95
-    // set container inline padding
-    // to avoid overlaying the container on the buttons
-    // on the right the padding is larger due to the scrollbar
-    if ((
-      settings.$.show_settings_icon ||
-      settings.$.thumbnails_update_button ||
-      settings.$.services_enable
-    ) && lsGridWidth >= 85
-    ) {
-      const circBtnSize = parseInt(window.getComputedStyle(doc).getPropertyValue('--circ-btn-size'));
-      // button size + small padding
-      // value = left right(increased padding for the scrollbar)
-      // const paddingInline = `${circBtnSize + 20}px ${circBtnSize + 30}px`;
-      doc.style.setProperty('--container-padding-inline', `${circBtnSize + 20}px`);
+    const narrowDock = window.matchMedia('(max-width: 700px), (max-height: 395px)').matches;
+    if (!narrowDock && width !== 70) doc.style.setProperty('--dock-container-width', width + '%');
+    else doc.style.removeProperty('--dock-container-width');
+    customizeDockGrid(grid, columns);
+
+    const hasControls = settings.$.show_settings_icon
+      || settings.$.thumbnails_update_button || settings.$.services_enable;
+    if (hasControls && width >= 85) {
+      const buttonSize = Number.parseInt(styles.getPropertyValue('--circ-btn-size'), 10) || 0;
+      doc.style.setProperty('--container-padding-inline', buttonSize + 20 + 'px');
+    } else {
+      doc.style.removeProperty('--container-padding-inline');
     }
 
-    // Calculate column dimensions
     const colWidth = Math.floor((grid.offsetWidth - ((columns - 1) * gap)) / columns);
-    // if column width less than 80px do not update styles
-    doc.style.setProperty('--grid-columns', colWidth < 80 ? '' : columns);
+    if (colWidth < 80) doc.style.removeProperty('--grid-columns');
+    else doc.style.setProperty('--grid-columns', columns);
   }
 };

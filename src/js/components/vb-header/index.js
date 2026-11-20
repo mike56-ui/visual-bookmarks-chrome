@@ -18,6 +18,7 @@ class VbHeader extends HTMLElement {
   engineIndex = 0;
   prevEngineIndex = 0;
   inputValue = '';
+  composing = false;
 
   suggestIndex = -1;
   suggestList = [];
@@ -55,7 +56,6 @@ class VbHeader extends HTMLElement {
     }
 
     this.permSuggestionsNode.dataset.tooltip = browser.i18n.getMessage('search_suggestions_permission_tooltip');
-    this.#suggestPermissionButtonVisibility();
   }
 
   get isBookmarksEngine() {
@@ -81,58 +81,31 @@ class VbHeader extends HTMLElement {
     const symbol = engineObject.value === 'browser' ? 'web_search' : engineObject.value;
     this.vbPopupSlotBtn.innerHTML = /* html */`<svg width="16" height="16"><use xlink:href="/img/symbol.svg#${symbol}"/></svg>`;
 
-    const placeholderEngine = engineObject.value === 'bookmarks'
-      ? browser.i18n.getMessage('placeholder_input_search_bookmarks')
-      : engineObject.title;
-
     const updateEngine = settings.$.search_engine === engine
       ? Promise.resolve()
       : settings.updateKey('search_engine', engine);
     updateEngine.catch(() => {}).then(() => {
-        this.inputNode.placeholder = engine !== 'browser'
-          ? browser.i18n.getMessage('placeholder_input_search', [placeholderEngine])
-          : browser.i18n.getMessage('search');
+      if (SEARCH_ENGINES[this.engineIndex].value !== engine) return;
+      if (engine === 'bookmarks') this.inputNode.placeholder = browser.i18n.getMessage('bing_bookmarks_placeholder');
+      else if (engine === 'browser') this.inputNode.placeholder = browser.i18n.getMessage('search');
+      else this.inputNode.placeholder = browser.i18n.getMessage('placeholder_input_search', [engineObject.title]);
 
-        this.inputNode.name = engineObject.name ?? 'bookmarks';
-        this.formNode.action = engineObject.url ?? '';
-
-        this.buttonSubmitNode.hidden = this.isBookmarksEngine;
-
-        if (!this.isBookmarksEngine) {
-          this.suggestNode?.remove();
-          this.suggestNode = $createElement('div', {
-            id: 'suggest',
-            class: 'suggest',
-            hidden: 'hidden'
-          });
-          this.formNode.append(this.suggestNode);
-        } else {
-          this.suggestNode?.remove();
-          this.suggestNode = null;
-        }
-
-        if (settings.$.open_link_newtab) {
-          !this.isBookmarksEngine
-            ? this.formNode.setAttribute('target', '_blank')
-            : this.formNode.removeAttribute('target');
-        }
-
-        // when switching engines
-        // if search is active, we will display the actual results when the bookmark search returns
-        // if we leave the search for bookmarks on the engine, then we need to reset the search results by bookmarks
-        if (this.inputNode.value.trim()) {
-          this.dispatchEvent(
-            new CustomEvent('vb:search', {
-              detail: {
-                search: this.inputNode.value,
-                isBookmarksEngine: this.isBookmarksEngine
-              },
-              bubbles: true,
-              cancelable: true
-            })
-          );
-        }
-      });
+      this.inputNode.name = engineObject.name ?? 'bookmarks';
+      this.formNode.action = engineObject.url ?? '';
+      this.buttonSubmitNode.hidden = this.isBookmarksEngine;
+      this.abortController?.abort();
+      this.closeSuggest();
+      this.suggestNode?.remove();
+      this.suggestNode = null;
+      if (!this.isBookmarksEngine) {
+        this.suggestNode = $createElement('div', { id: 'suggest', class: 'suggest', hidden: 'hidden' });
+        this.formNode.append(this.suggestNode);
+      }
+      this.#suggestPermissionButtonVisibility();
+      if (settings.$.open_link_newtab && !this.isBookmarksEngine) this.formNode.target = '_blank';
+      else this.formNode.removeAttribute('target');
+      if (!this.composing && this.inputNode.value.trim()) this.#dispatchBookmarkSearch();
+    });
   }
 
   async #suggestPermissionButtonVisibility() {
@@ -140,6 +113,7 @@ class VbHeader extends HTMLElement {
 
     if (shouldCheckPermission) {
       this.permSuggestionsNode.hidden = true;
+      this.inputNode.classList.remove('lg-offset');
       return;
     }
 
@@ -147,7 +121,7 @@ class VbHeader extends HTMLElement {
       origins: ['https://google.com/*']
     });
 
-    this.permSuggestionsNode.hidden = hasSuggestPermission;
+    this.permSuggestionsNode.hidden = this.isBookmarksEngine || hasSuggestPermission;
 
     this.inputNode.classList.toggle('lg-offset', !this.permSuggestionsNode.hidden);
   }
@@ -168,6 +142,8 @@ class VbHeader extends HTMLElement {
   #attachEvents() {
     this.handleInput = this.handleInput.bind(this);
     this.inputNode.addEventListener('input', this.handleInput);
+    this.inputNode.addEventListener('compositionstart', this.handleCompositionStart);
+    this.inputNode.addEventListener('compositionend', this.handleInput);
     this.permSuggestionsNode.addEventListener('click', this.handleSuggestPermission);
 
     this.handleReset = this.handleReset.bind(this);
@@ -201,6 +177,8 @@ class VbHeader extends HTMLElement {
 
   #dettachEvents() {
     this.inputNode.removeEventListener('input', this.handleInput);
+    this.inputNode.removeEventListener('compositionstart', this.handleCompositionStart);
+    this.inputNode.removeEventListener('compositionend', this.handleInput);
     this.permSuggestionsNode.removeEventListener('click', this.handleSuggestPermission);
     this.resetNode.removeEventListener('click', this.handleReset);
     this.formNode.removeEventListener('submit', this.handleSubmit);
@@ -256,6 +234,8 @@ class VbHeader extends HTMLElement {
 
   async handleSubmit(e) {
     e.preventDefault();
+    if (this.composing) return;
+    if (this.isBookmarksEngine) this.#dispatchBookmarkSearch(true);
     if (this.isBookmarksEngine || !this.inputNode.value.trim()) {
       this.inputNode.focus();
       return;
@@ -283,7 +263,6 @@ class VbHeader extends HTMLElement {
       return engineNode.classList.contains('is-active');
     });
     this.engine = target.dataset.engine;
-    this.#suggestPermissionButtonVisibility();
     this.vbPopup.hide();
     this.inputNode.focus();
   }
@@ -305,20 +284,25 @@ class VbHeader extends HTMLElement {
     this.inputNode.focus();
   }
 
+  #dispatchBookmarkSearch(immediate = false) {
+    this.dispatchEvent(new CustomEvent('vb:search', {
+      detail: { search: this.inputNode.value, isBookmarksEngine: this.isBookmarksEngine, immediate },
+      bubbles: true,
+      cancelable: true
+    }));
+  }
+
+  handleCompositionStart = () => {
+    this.composing = true;
+    if (this.isBookmarksEngine) this.dispatchEvent(new Event('vb:searchcomposing'));
+  };
+
   handleInput(e) {
-    if (e.isComposing) return;
+    if (e.type === 'compositionend') this.composing = false;
+    if (e.isComposing || this.composing || (e.type === 'compositionend' && !this.isBookmarksEngine)) return;
     const search = e.target.value;
     if (this.isBookmarksEngine) {
-      this.dispatchEvent(
-        new CustomEvent('vb:search', {
-          detail: {
-            search,
-            isBookmarksEngine: this.isBookmarksEngine
-          },
-          bubbles: true,
-          cancelable: true
-        })
-      );
+      this.#dispatchBookmarkSearch();
     } else {
       this.inputValue = e.target.value;
       this.permSuggestionsNode.hidden && this.suggestSearch(e.target.value.trim());
@@ -328,7 +312,7 @@ class VbHeader extends HTMLElement {
   }
 
   handleDocumentKeydown(e) {
-    if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    if (!settings.$.show_toolbar || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
     const active = this.getActiveElement();
     const searchShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k';
     const slashShortcut = e.code === 'Slash' && !e.ctrlKey && !e.metaKey && !e.altKey
@@ -372,22 +356,31 @@ class VbHeader extends HTMLElement {
   }
 
   async suggestSearch(query) {
+    const target = this.suggestNode;
     this.suggestIndex = -1;
     if (this.abortController) {
       this.abortController.abort();
     }
     if (query.length > 0) {
       try {
-        this.suggestList = await this.suggestRequest(query);
-      } catch (error) {}
+        const suggestions = await this.suggestRequest(query);
+        if (!target || target !== this.suggestNode || this.inputNode.value.trim() !== query) return;
+        this.suggestList = suggestions;
+      } catch {
+        return;
+      }
     } else {
       this.suggestList = [];
       this.suggestIndex = -1;
     }
 
-    this.suggestNode.innerHTML = this.suggestList.map((suggest, index) => {
-      return `<div data-suggest="${index}">${suggest}</div>`;
-    }).join('');
+    if (!target) return;
+    target.replaceChildren(...this.suggestList.map((suggest, index) => {
+      const item = document.createElement('div');
+      item.dataset.suggest = String(index);
+      item.textContent = suggest;
+      return item;
+    }));
     this.suggestNode.hidden = !this.suggestList.length;
   }
 

@@ -1,4 +1,28 @@
 {
+  "bing_results_heading": {
+    "message": "Wyniki z wyszukiwarki Bing"
+  },
+  "bing_more_results": {
+    "message": "Więcej w Bing"
+  },
+  "bing_enable": {
+    "message": "Włącz wyszukiwanie w Bing"
+  },
+  "bing_permission_hint": {
+    "message": "Po włączeniu tej opcji wpisane tu hasła będą wysyłane do Bing."
+  },
+  "bing_loading": {
+    "message": "Wyszukiwanie w Bing…"
+  },
+  "bing_no_results": {
+    "message": "Brak pasujących stron w Bing."
+  },
+  "bing_unavailable": {
+    "message": "Wyniki Bing są chwilowo niedostępne."
+  },
+  "bing_bookmarks_placeholder": {
+    "message": "Szukaj w zakładkach i w Bing"
+  },
   "ext_name": {
     "message": "Wizualne zakładki"
   },
@@ -207,6 +231,12 @@
   "options": {
     "message": "Opcje"
   },
+  "settings_fill_missing_previews": {
+    "message": "Automatycznie uzupełniaj brakujące miniatury"
+  },
+  "settings_fill_missing_previews_note": {
+    "message": "Twórz brakujące miniatury zakładek widocznych na ekranie."
+  },
   "view_setting": {
     "message": "Widok"
   },
@@ -283,7 +313,7 @@
     "message": "Pokaż tytuł zakładki"
   },
   "show_favicon": {
-    "message": "Pokaż ikonę ulubionych obok tytułu"
+    "message": "Pokaż ikony stron na kartach zakładek"
   },
   "open_link_newtab": {
     "message": "Otwieraj zakładki i wyniki wyszukiwania w nowej karcie"

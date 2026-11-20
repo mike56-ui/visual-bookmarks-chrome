@@ -328,16 +328,85 @@ body[data-folder-dock] .search-button:hover {
 
 body[data-folder-dock] .search-actions [hidden] { display: none; }
 
+.workspace-toolbar-frame {
+  z-index: 1;
+  margin-inline-end: var(--bookmark-scrollbar-gutter, var(--scrollbar-width));
+  padding-block: 16px 8px;
+  container-type: inline-size;
+}
+
 .newtab-toolbar {
   position: relative;
   z-index: 1012;
   display: flex;
   align-items: center;
   gap: 9px;
-  margin: 16px auto 0;
+  margin: 0 auto;
 }
 
 .newtab-toolbar > header { min-width: 0; flex: 1; }
+.newtab-toolbar .header__items { min-width: 0; }
+.bing-results {
+  margin-block-start: 24px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 16px;
+  color: var(--text-main);
+  background: var(--control-surface);
+}
+
+.bing-results[hidden], .bing-results [hidden] { display: none; }
+.bing-results__header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.bing-results__header h2 { margin: 0; font: 600 14px/1.5 var(--font-family); }
+#bingMore, #bingPermission {
+  color: var(--focus-color);
+  font: 500 13px/1.5 var(--font-family);
+}
+#bingMore { text-decoration: none; }
+#bingMore:hover { text-decoration: underline; }
+#bingStatus { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; }
+#bingStatus:empty,
+.bing-results__list:empty { display: none; }
+#bingPermission {
+  margin-block-start: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+.bing-results__list {
+  display: flex;
+  gap: 4px;
+  margin: 4px -3px -3px;
+  padding: 3px;
+  overflow: auto hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 3px;
+  scrollbar-width: thin;
+}
+[data-bing-result] {
+  display: flex;
+  min-width: 0;
+  flex: 1 0 min(100%, 12rem);
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 6px;
+  border-radius: 7px;
+  color: inherit;
+  text-decoration: none;
+  scroll-snap-align: start;
+}
+[data-bing-result]:hover, #bingPermission:hover { background: var(--surface-hover); }
+.bing-results :is(a, button):focus-visible { outline: 2px solid var(--focus-color); outline-offset: 1px; }
+.bing-result__title, .bing-result__domain { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bing-result__title { font-size: 14px; line-height: 1.45; }
+.bing-result__domain { color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+
+/* Keep a short set of local matches and its web results together. */
+.has-search .grid--vcenter { min-height: auto; }
+
 .newtab-toolbar [hidden] { display: none; }
 .newtab-toolbar__button {
   display: grid;
@@ -357,47 +426,9 @@ body[data-folder-dock] .search-actions [hidden] { display: none; }
 .newtab-toolbar__button svg { fill: currentcolor; }
 .newtab-toolbar__button:hover,
 .newtab-toolbar__button[aria-expanded="true"] { background: var(--surface-active); }
-.newtab-toolbar__button:focus-visible,
-.newtab-actions__list :focus-visible { outline: 2px solid var(--focus-color); outline-offset: -2px; }
+.newtab-toolbar__button:focus-visible { outline: 2px solid var(--focus-color); outline-offset: -2px; }
 
-.newtab-actions { position: relative; }
-.newtab-actions__list {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  display: grid;
-  width: max-content;
-  max-width: min(260px, calc(100vw - 32px));
-  padding: 5px;
-  border: 1px solid var(--line-subtle);
-  border-radius: 13px;
-  background: var(--control-surface);
-  box-shadow: var(--panel-shadow);
-}
-
-.newtab-actions__list > * {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 36px;
-  padding: 6px 9px;
-  border: 0;
-  border-radius: 8px;
-  color: var(--text-main);
-  background: transparent;
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.newtab-actions__list > :hover,
-.newtab-actions__list > :focus-within { background: var(--surface-hover); }
-.newtab-actions__option input { accent-color: var(--focus-color); }
-
-@media (max-width: 460px) {
+@container (max-width: 460px) {
   .newtab-toolbar { gap: 5px; }
   .newtab-toolbar__button { width: 36px; }
   .header input { padding-left: 40px; padding-right: 37px; }

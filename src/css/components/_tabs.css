@@ -73,6 +73,10 @@
   flex: 1;
   min-width: 150px;
   padding: 15px 10px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -468,8 +468,8 @@
 }
 .site-icon__image {
   position: absolute;
-  width: 36px;
-  height: 36px;
+  width: var(--icon-width, 36px);
+  height: var(--icon-height, 36px);
   opacity: 0;
   display: block;
   max-width: 36px;
@@ -483,7 +483,6 @@
   text-transform: uppercase;
 }
 .site-icon [hidden] { display: none; }
-.folder-card__cell .site-icon,
 .bookmark__img--children .site-icon {
   width: 24px;
   height: 24px;
@@ -492,9 +491,7 @@
   background: transparent;
   box-shadow: none;
 }
-.folder-card__cell .site-icon__image,
 .bookmark__img--children .site-icon__image { max-width: 18px; max-height: 18px; border-radius: 0; }
-.folder-card__cell .site-icon__fallback,
 .bookmark__img--children .site-icon__fallback { font-size: 13px; }
 .bookmark__screenshot {
   position: absolute;
@@ -540,7 +537,7 @@
 .bookmark__title {
   width: 100%;
   color: var(--text-main);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 550;
   line-height: 1.45;
   text-align: center;
@@ -552,13 +549,14 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
   font-weight: 400;
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.bookmark__refresh,
 .bookmark__delete {
   position: absolute;
   z-index: 20;
@@ -580,15 +578,42 @@
   pointer-events: none;
   transition: opacity 0.12s ease, background-color 0.12s ease;
 }
+.bookmark__refresh {
+  right: auto;
+  left: 6px;
+}
+.bookmark__refresh[hidden] { display: none; }
+.bookmark:hover .bookmark__refresh,
+.bookmark__refresh:focus-visible,
 .bookmark:hover .bookmark__delete,
-.bookmark__delete:focus-visible { opacity: 1; pointer-events: auto; }
-.bookmark__delete:focus-visible { outline: 2px solid var(--focus-color); outline-offset: -3px; }
+.bookmark__delete:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.bookmark__refresh:focus-visible,
+.bookmark__delete:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: -3px;
+}
+.bookmark__refresh:hover { color: var(--focus-color); background: var(--surface-hover); }
 .bookmark__delete:hover { color: #a02e41; }
+.bookmark[has-overlay] .bookmark__refresh { visibility: hidden; }
+
+@media (hover: none) {
+  .bookmark__refresh {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .bookmark .dropzone-bookmark { inset: 0; z-index: 10; border-radius: inherit; }
 .bookmark__summary-folder { display: flex; flex-wrap: wrap; gap: 4px; align-content: center; }
 .bookmark__img--children { display: grid; place-items: center; }
+
 @media (prefers-reduced-motion: reduce) {
-  .bookmark__stage, .bookmark__delete { transition: none; }
+  .bookmark__stage,
+  .bookmark__refresh,
+  .bookmark__delete { transition: none; }
   .bookmark__screenshot { transition-duration: 0s; }
 }
 /* stylelint-enable no-duplicate-selectors */

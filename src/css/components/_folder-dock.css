@@ -28,7 +28,32 @@
   --panel-shadow: 0 9px 28px rgb(0 0 0 / 22%);
 }
 
-body[data-folder-dock] { background-color: var(--page-surface); }
+body[data-folder-dock] {
+  --folder-dock-left: 300px;
+
+  /* stylelint-disable length-zero-no-unit -- These insets participate in length calculations. */
+  --folder-dock-right: 0px;
+  --folder-dock-top: 0px;
+  --folder-dock-bottom: 0px;
+
+  /* stylelint-enable length-zero-no-unit */
+  --workspace-height: calc(100dvh - var(--folder-dock-top) - var(--folder-dock-bottom));
+
+  background-color: var(--page-surface);
+}
+
+.bookmark-workspace {
+  position: fixed;
+  inset: var(--folder-dock-top) var(--folder-dock-right) var(--folder-dock-bottom) var(--folder-dock-left);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.bookmark-workspace .app {
+  height: auto;
+  container-type: inline-size;
+}
 
 .folder-dock {
   position: fixed;
@@ -39,6 +64,7 @@ body[data-folder-dock] { background-color: var(--page-surface); }
   left: var(--panel-x, 16px);
   width: var(--panel-width, 268px);
   height: var(--panel-height, min(580px, calc(100dvh - 32px)));
+  container: folder-panel / size;
   padding: 28px 10px 18px;
   border: 1px solid var(--line-subtle);
   border-radius: 22px;
@@ -53,11 +79,13 @@ body[data-folder-dock] { background-color: var(--page-surface); }
 .folder-dock__resize {
   position: absolute;
   border: 0;
+  padding: 0;
   background: transparent;
   touch-action: none;
 }
 
 .folder-dock__handle {
+  z-index: 1;
   top: 2px;
   left: calc(50% - 30px);
   width: 60px;
@@ -74,25 +102,49 @@ body[data-folder-dock] { background-color: var(--page-surface); }
 }
 
 .folder-dock__handle:active { cursor: grabbing; }
-
-.folder-dock__resize {
-  right: 3px;
-  bottom: 3px;
-  width: 27px;
-  height: 27px;
-  cursor: nwse-resize;
+.folder-dock.is-moving[data-snap] .folder-dock__handle::after {
+  background: var(--focus-color);
+  transform: scaleX(1.08);
 }
 
-.folder-dock__resize::after {
-  position: absolute;
-  content: "";
-  right: 6px;
-  bottom: 6px;
-  width: 10px;
+.folder-dock__resize:is([data-resize-edge="n"], [data-resize-edge="s"]) {
+  inset-inline: 17px;
   height: 10px;
-  border-right: 2px solid var(--text-secondary);
-  border-bottom: 2px solid var(--text-secondary);
-  border-bottom-right-radius: 3px;
+  cursor: ns-resize;
+}
+.folder-dock__resize:is([data-resize-edge="e"], [data-resize-edge="w"]) {
+  inset-block: 17px;
+  width: 10px;
+  cursor: ew-resize;
+}
+[data-resize-edge="n"] { top: -5px; }
+[data-resize-edge="s"] { bottom: -5px; }
+[data-resize-edge="e"] { right: -5px; }
+[data-resize-edge="w"] { left: -5px; }
+
+.folder-dock__resize:is([data-resize-edge="nw"], [data-resize-edge="ne"], [data-resize-edge="sw"], [data-resize-edge="se"]) {
+  width: 20px;
+  height: 20px;
+}
+[data-resize-edge="nw"] {
+  top: -1px;
+  left: -1px;
+  cursor: nwse-resize;
+}
+[data-resize-edge="ne"] {
+  top: -1px;
+  right: -1px;
+  cursor: nesw-resize;
+}
+[data-resize-edge="sw"] {
+  bottom: -1px;
+  left: -1px;
+  cursor: nesw-resize;
+}
+[data-resize-edge="se"] {
+  bottom: 2px;
+  right: 2px;
+  cursor: nwse-resize;
 }
 
 .folder-dock__handle:focus-visible,
@@ -132,6 +184,7 @@ body[data-folder-dock] { background-color: var(--page-surface); }
 
 .folder-dock__list {
   min-height: 0;
+  min-width: 0;
   flex: 1;
   padding: 2px;
   overflow: auto;
@@ -201,6 +254,20 @@ body[data-folder-dock] { background-color: var(--page-surface); }
 }
 
 .folder-card__cell.is-empty { opacity: 0.55; }
+
+.folder-card__cell .site-icon {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.folder-card__cell .site-icon__image {
+  max-width: 100%;
+  max-height: 100%;
+}
 
 .folder-card__meta {
   display: flex;
@@ -278,27 +345,86 @@ body[data-folder-dock] { background-color: var(--page-surface); }
 
 .folder-card__delete:hover { color: #a02e41; }
 
-body[data-folder-dock] .app { margin-left: var(--folder-dock-reserved, 300px); }
-body[data-folder-dock] .toast-container--bottom-left,
-body[data-folder-dock] .toast-container--top-left {
-  left: var(--folder-dock-reserved, 300px);
+/* A horizontal dock keeps each folder's preview and scrolls independently. */
+.folder-dock:is([data-dock="top"], [data-dock="bottom"], .is-open) {
+  flex-direction: row;
+  gap: 10px;
+  padding: 24px 12px 12px;
+
+  & .folder-dock__toolbar {
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 3px;
+  }
+
+  & .folder-dock__list {
+    --folder-list-axis: horizontal;
+
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 3px 2px;
+    overflow: auto hidden;
+    scrollbar-gutter: auto;
+  }
+
+  & .folder-card {
+    display: flex;
+    flex: 0 0 clamp(150px, 16cqw, 220px);
+    flex-direction: column;
+    justify-content: center;
+    height: 100%;
+    max-width: 100%;
+    min-height: 0;
+    max-height: 132px;
+    margin: 0;
+  }
+
+  & .folder-card__preview {
+    flex: 1;
+    min-height: 0;
+    max-height: 64px;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+}
+
+body[data-folder-dock] .toast-container {
+  left: max(14px, var(--folder-dock-left));
+  right: max(14px, var(--folder-dock-right));
+}
+body[data-folder-dock] :is(.toast-container--top, .toast-container--top-left, .toast-container--top-right) {
+  top: max(16px, var(--folder-dock-top));
+}
+body[data-folder-dock] :is(.toast-container--bottom, .toast-container--bottom-left, .toast-container--bottom-right) {
+  bottom: max(16px, var(--folder-dock-bottom));
+}
+body[data-folder-dock] vb-virtual-pagination {
+  top: calc(var(--folder-dock-top) + var(--workspace-height) / 2);
+  right: calc(var(--folder-dock-right) + 12px);
 }
 
 @media (max-width: 700px), (max-height: 395px) {
-  body[data-folder-dock] .app { margin-left: 0; }
-  body[data-folder-dock] .toast-container--bottom-left,
-  body[data-folder-dock] .toast-container--top-left { left: 0; }
+  body[data-folder-dock] {
+    --folder-dock-left: var(--folder-dock-right);
+    --compact-panel-height: min(158px, 38dvh);
+  }
+  body[data-folder-dock]:has(> .folder-dock.is-open) {
+    --folder-dock-top: calc(var(--compact-panel-height) + 12px);
+  }
 
   .folder-dock {
-    top: min(66px, 22dvh);
-    left: 10px;
-    width: min(288px, calc(100vw - 20px));
-    height: min(580px, calc(100dvh - min(66px, 22dvh) - 12px));
-    padding-top: 12px;
+    top: 8px;
+    inset-inline: 8px;
+    width: auto;
+    height: var(--compact-panel-height);
     display: none;
   }
 
-  .folder-dock.is-open { display: flex; }
+  .folder-dock.is-open {
+    display: flex;
+    padding-block: 8px;
+  }
   .folder-dock__handle,
   .folder-dock__resize { display: none; }
 }
